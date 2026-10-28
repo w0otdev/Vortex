@@ -18,6 +18,14 @@ pub fn parse_raw_email(
     let recipient = find_header(&headers, "to")
         .map(decode_rfc2047)
         .unwrap_or_default();
+    let received_at = find_header(&headers, "date")
+        .and_then(|date| {
+            time::OffsetDateTime::parse(date.trim(), &time::format_description::well_known::Rfc2822)
+                .ok()
+        })
+        .map(|date| date.unix_timestamp())
+        .filter(|&date| date > 0 && date <= received_at_fallback)
+        .unwrap_or(received_at_fallback);
     let subject = find_header(&headers, "subject")
         .map(decode_rfc2047)
         .unwrap_or_default();
@@ -80,7 +88,7 @@ pub fn parse_raw_email(
         sender,
         subject,
         effective_text,
-        received_at_fallback,
+        received_at,
     );
     item.recipient = recipient;
     item.body_html = sanitized_html;
@@ -457,4 +465,22 @@ pub fn extract_url_domain(url: &str) -> String {
     let host_port = without_scheme.split('/').next().unwrap_or("");
     let host = host_port.split(':').next().unwrap_or("");
     host.trim_start_matches("www.").to_ascii_lowercase()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_message_date_and_falls_back_when_invalid() {
+        let message = "From: sender@example.com\r\nTo: receiver@example.com\r\nDate: Wed, 15 Nov 2023 05:13:20 +0700\r\nSubject: Verification code 123456\r\n\r\nCode: 123456";
+        let item = parse_raw_email("account", "1", message, vec![], 1_700_001_000);
+        assert_eq!(item.received_at, 1_700_000_000);
+        assert_eq!(item.recipient, "receiver@example.com");
+        let invalid = message.replace("Wed, 15 Nov 2023 05:13:20 +0700", "invalid");
+        assert_eq!(
+            parse_raw_email("account", "1", &invalid, vec![], 1_700_001_000).received_at,
+            1_700_001_000
+        );
+    }
 }

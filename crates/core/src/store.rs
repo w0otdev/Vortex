@@ -273,11 +273,23 @@ impl SqliteStore {
                 ON CONFLICT(source, account, external_id) DO UPDATE SET
                     sender = excluded.sender,
                     subject = excluded.subject,
-                    body_text = excluded.body_text,
-                    body_html = excluded.body_html,
-                    state = excluded.state,
-                    snoozed_until = excluded.snoozed_until,
-                    pinned = excluded.pinned,
+                    body_text = CASE
+                        WHEN excluded.body_text != '' THEN excluded.body_text
+                        ELSE items.body_text
+                    END,
+                    body_html = CASE
+                        WHEN excluded.body_html != '' THEN excluded.body_html
+                        ELSE items.body_html
+                    END,
+                    state = CASE
+                        WHEN items.state IN ('trash', 'archived', 'spam', 'read') THEN items.state
+                        ELSE excluded.state
+                    END,
+                    snoozed_until = COALESCE(items.snoozed_until, excluded.snoozed_until),
+                    pinned = CASE
+                        WHEN items.pinned = 1 THEN 1
+                        ELSE excluded.pinned
+                    END,
                     labels_json = excluded.labels_json,
                     category = excluded.category,
                     codes_json = excluded.codes_json,
@@ -382,7 +394,7 @@ impl SqliteStore {
                  WHERE (?1 IS NULL OR source = ?1)
                    AND (?2 IS NULL OR account = ?2)
                    AND (?3 IS NULL OR category = ?3)
-                   AND (?4 IS NULL OR state = ?4)
+                   AND ((?4 IS NULL AND state NOT IN ('trash', 'archived', 'spam')) OR state = ?4)
                    AND (?5 = 0 OR state = 'unread')
                    AND (?6 = 0 OR pinned = 1)
                  ORDER BY pinned DESC, received_at DESC
@@ -430,6 +442,7 @@ impl SqliteStore {
                  FROM items_fts f
                  JOIN items i ON i.id = f.rowid
                  WHERE items_fts MATCH ?1
+                   AND i.state NOT IN ('trash', 'archived', 'spam')
                  ORDER BY rank, i.received_at DESC
                  LIMIT ?2",
             )
@@ -457,6 +470,10 @@ impl SqliteStore {
                         params![item_id],
                     )
                     .map_err(|e| e.to_string())?;
+                let _ = self.conn.execute(
+                    "DELETE FROM recent_codes WHERE item_id = ?1",
+                    params![item_id],
+                );
             }
             QuickAction::Delete => {
                 self.conn
@@ -465,6 +482,10 @@ impl SqliteStore {
                         params![item_id],
                     )
                     .map_err(|e| e.to_string())?;
+                let _ = self.conn.execute(
+                    "DELETE FROM recent_codes WHERE item_id = ?1",
+                    params![item_id],
+                );
             }
             QuickAction::MarkRead => {
                 self.conn
@@ -562,12 +583,13 @@ impl SqliteStore {
         let mut stmt = self
             .conn
             .prepare(
-                "SELECT code_hash, item_id, message_id, code_enc, sender, service,
-                        received_at, expires_at, verification_link, phishing_warning,
-                        detected_latency_ms
-                 FROM recent_codes
-                 WHERE expires_at > ?1
-                 ORDER BY received_at DESC
+                "SELECT c.code_hash, c.item_id, c.message_id, c.code_enc, c.sender, c.service,
+                        c.received_at, c.expires_at, c.verification_link, c.phishing_warning,
+                        c.detected_latency_ms, COALESCE(i.account, ''), COALESCE(i.recipient, '')
+                 FROM recent_codes c LEFT JOIN items i ON i.id = c.item_id
+                 WHERE c.expires_at > ?1
+                   AND COALESCE(i.state, '') NOT IN ('trash', 'archived', 'spam')
+                 ORDER BY c.received_at DESC
                  LIMIT 25",
             )
             .map_err(|e| format!("list_recent_codes prepare failed: {e}"))?;
@@ -583,6 +605,8 @@ impl SqliteStore {
                     message_id: row.get(2)?,
                     code,
                     sender: row.get(4)?,
+                    account: row.get(11)?,
+                    recipient: row.get(12)?,
                     service: row.get(5)?,
                     received_at: row.get(6)?,
                     expires_at: row.get(7)?,

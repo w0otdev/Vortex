@@ -124,7 +124,12 @@ pub fn detect_fast_path(
 
     let (code, score) = best?;
     let expiry_secs = parse_expiry_seconds(&lower).unwrap_or(DEFAULT_EXPIRY_SECS);
-    let expires_at = now_epoch + expiry_secs;
+    let received_at = if item.received_at > 0 && item.received_at <= now_epoch {
+        item.received_at
+    } else {
+        now_epoch
+    };
+    let expires_at = received_at.saturating_add(expiry_secs);
     let service = if !item.sender_domain.is_empty() {
         item.sender_domain.clone()
     } else {
@@ -153,6 +158,8 @@ pub fn detect_fast_path(
         code_hash,
         code,
         sender: item.sender.clone(),
+        account: item.account.clone(),
+        recipient: item.recipient.clone(),
         service,
         received_at: item.received_at,
         expires_at,
@@ -498,6 +505,27 @@ mod tests {
         assert!(metrics.precision >= 0.99);
         assert!(metrics.recall >= 0.99);
         assert!(metrics.max_latency_micros < 50_000);
+    }
+
+    #[test]
+    fn expiry_uses_receipt_time_and_falls_back_when_missing() {
+        let mut item = Item::new(
+            SourceKind::Email,
+            "account-id",
+            "old-message",
+            "Service <noreply@service.vn>",
+            "Verification code 778899",
+            "Your verification code is 778899. Expires in 5 minutes.",
+            1_700_000_000,
+        );
+        item.recipient = "user@example.com".into();
+        let (_, popup) = detect_fast_path(&item, 1_700_001_000, &[]).unwrap();
+        assert_eq!(popup.expires_at, 1_700_000_300);
+        assert_eq!(popup.account, "account-id");
+        assert_eq!(popup.recipient, "user@example.com");
+        item.received_at = 0;
+        let (_, popup) = detect_fast_path(&item, 1_700_001_000, &[]).unwrap();
+        assert_eq!(popup.expires_at, 1_700_001_300);
     }
 
     #[test]

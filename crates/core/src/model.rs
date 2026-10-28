@@ -264,6 +264,10 @@ pub struct OtpPopupEvent {
     pub code_hash: String,
     pub code: String,
     pub sender: String,
+    #[serde(default)]
+    pub account: String,
+    #[serde(default)]
+    pub recipient: String,
     pub service: String,
     pub received_at: i64,
     pub expires_at: i64,

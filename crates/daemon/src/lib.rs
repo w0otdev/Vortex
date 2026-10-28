@@ -3,7 +3,7 @@ pub mod hub;
 pub mod notify;
 pub mod service;
 
-use crate::connectors::{RssConnector, TelegramBotConnector, ingest_android_e2e_relay};
+use crate::connectors::ingest_android_e2e_relay;
 use crate::hub::{EncryptedEnvelope, create_pairing_ticket};
 use crate::notify::{ClipboardGuard, emit_os_otp_notification};
 use std::io::{BufRead, BufReader, Read, Write};
@@ -26,7 +26,7 @@ use vortex_core::tier::{HardwareProbe, TierRuntimePolicy};
 use vortex_core::{DeviceTier, TierBudget};
 use vortex_imap::ImapConnector;
 use vortex_otp::detect_fast_path;
-use vortex_ui_web::{APP_JS, INDEX_HTML, STYLES_CSS};
+use vortex_ui_web::{APP_JS, INDEX_HTML, OTP_OVERLAY_HTML, STYLES_CSS};
 
 pub fn active_budget(tier: DeviceTier) -> TierBudget {
     tier.budget()
@@ -73,7 +73,9 @@ pub fn process_new_item(
     let mut fast_popup: Option<OtpPopupEvent> = None;
     if let Some((extracted_code, popup)) = detect_fast_path(&item, now_epoch, &blocked_patterns) {
         item.extracted_codes.push(extracted_code);
-        fast_popup = Some(popup);
+        if popup.expires_at > now_epoch {
+            fast_popup = Some(popup);
+        }
     }
 
     // 2. BACKGROUND PATH: rule-based classification, phishing guard, entities, user rules.
@@ -113,14 +115,26 @@ pub fn process_new_item(
     }
 
     let item_id = store.upsert_item(&item)?;
+    let stored_hidden = store
+        .get_item(item_id)
+        .ok()
+        .flatten()
+        .is_some_and(|st| {
+            matches!(
+                st.state,
+                vortex_core::model::ItemState::Trash
+                    | vortex_core::model::ItemState::Archived
+                    | vortex_core::model::ItemState::Spam
+            )
+        });
 
-    if policy.semantic_search_enabled {
+    if policy.semantic_search_enabled && !stored_hidden {
         let emb_text = format!("{} {} {}", item.sender, item.subject, item.body_text);
         let vec = compute_local_embedding(&emb_text);
         let _ = store.upsert_embedding(item_id, &vec);
     }
 
-    if let Some(ref mut popup) = fast_popup {
+    if !stored_hidden && let Some(ref mut popup) = fast_popup {
         popup.item_id = item_id;
         popup.code_hash = OtpPopupEvent::compute_dedup_hash(
             &format!("{}:{}", item.account, item.external_id),
@@ -144,30 +158,17 @@ pub fn fetch_account_items(
     last_uid: u32,
     secrets: &SecretStore,
 ) -> Result<(Vec<Item>, Option<ImapConnector>), String> {
-    match account.source {
-        SourceKind::Email => {
-            if account.auth_method == "google_web" || account.host == "session.gmail.com" {
-                return Ok((Vec::new(), None));
-            }
-            let mut imap =
-                ImapConnector::new(account.clone(), secrets.clone()).with_last_seen_uid(last_uid);
-            imap.connect()?;
-            let fetched = imap.sync(None)?;
-            Ok((fetched, Some(imap)))
-        }
-        SourceKind::Telegram => {
-            let mut tg = TelegramBotConnector::new(account.clone(), secrets.clone());
-            tg.connect()?;
-            let fetched = tg.sync(None)?;
-            Ok((fetched, None))
-        }
-        SourceKind::Rss => {
-            let mut rss = RssConnector::new(account.clone());
-            let fetched = rss.sync(None)?;
-            Ok((fetched, None))
-        }
-        _ => Ok((Vec::new(), None)),
+    if account.source != SourceKind::Email {
+        return Ok((Vec::new(), None));
     }
+    if account.auth_method == "google_web" || account.host == "session.gmail.com" {
+        return Ok((Vec::new(), None));
+    }
+    let mut imap =
+        ImapConnector::new(account.clone(), secrets.clone()).with_last_seen_uid(last_uid);
+    imap.connect()?;
+    let fetched = imap.sync(None)?;
+    Ok((fetched, Some(imap)))
 }
 
 pub fn sync_single_account(
@@ -570,6 +571,12 @@ pub fn handle_http_connection(
     let body_str = String::from_utf8_lossy(&body_bytes);
 
     match (method, path) {
+        ("GET", "/otp-overlay") => write_http_response(
+            &mut stream,
+            200,
+            "text/html; charset=utf-8",
+            OTP_OVERLAY_HTML,
+        ),
         ("GET", "/") => write_http_response(
             &mut stream,
             200,
@@ -1389,6 +1396,44 @@ mod tests {
     use vortex_imap::{FakeImapMessage, FakeImapServer};
 
     #[test]
+    fn expired_otp_is_stored_with_mail_but_does_not_trigger_popup() {
+        let store = SqliteStore::open_in_memory(true, None).unwrap();
+        let secrets = SecretStore::new_memory();
+        let cfg = AppConfig::default();
+        let probe = HardwareProbe {
+            ram_mb: 8192,
+            cpu_cores: 4,
+            arch: "x86_64".into(),
+            on_battery: false,
+            headless: true,
+        };
+        let policy = TierRuntimePolicy::compute(&probe, ProfileMode::Standard, false);
+        let item = Item::new(
+            SourceKind::Email,
+            "user@example.com",
+            "old-otp",
+            "Service <noreply@example.com>",
+            "Verification code 123456",
+            "Your verification code is 123456. Expires in 5 minutes.",
+            1_700_000_000,
+        );
+        let result =
+            process_new_item(&store, item, 1_700_001_000, &[], &cfg, &policy, &secrets).unwrap();
+        assert!(result.popup_event.is_none());
+        assert_eq!(result.category, ItemCategory::CodeOtp);
+        assert_eq!(
+            store
+                .get_item(result.item_id)
+                .unwrap()
+                .unwrap()
+                .extracted_codes[0]
+                .code,
+            "123456"
+        );
+        assert!(store.list_recent_codes(1_700_001_000).unwrap().is_empty());
+    }
+
+    #[test]
     fn acceptance_100_mixed_mails_pipeline() {
         let mut fake_mails = Vec::with_capacity(100);
         let mut uid = 1u32;
@@ -1598,6 +1643,8 @@ mod tests {
             code_hash: OtpPopupEvent::compute_dedup_hash("m-1", "654321"),
             code: "654321".into(),
             sender: "GitHub <noreply@github.com>".into(),
+            account: "work-account".into(),
+            recipient: "work@example.com".into(),
             service: "github.com".into(),
             received_at: 1_700_000_000,
             expires_at: 1_700_000_600,
@@ -1732,7 +1779,7 @@ mod tests {
             let srv = FakeImapServer::start(vec![FakeImapMessage {
                 uid: 1,
                 raw_rfc5322: format!(
-                    "From: Steam <noreply@steampowered.com>\r\nSubject: Your Steam Guard code is {code}\r\nMessage-ID: <steam-{idx}@steampowered.com>\r\n\r\nEnter verification code {code} to sign in. Expires in 10 minutes."
+                    "From: Steam <noreply@steampowered.com>\r\nTo: multi-{idx}@example.com\r\nSubject: Your Steam Guard code is {code}\r\nMessage-ID: <steam-{idx}@steampowered.com>\r\n\r\nEnter verification code {code} to sign in. Expires in 10 minutes."
                 ),
                 flags: vec![],
                 gm_labels: vec![],
@@ -1772,5 +1819,10 @@ mod tests {
         let guard = state.lock().unwrap();
         let codes = guard.store.list_recent_codes(now_epoch()).unwrap();
         assert_eq!(codes.len(), 4);
+        for code in codes {
+            assert!(code.account.starts_with("multi-"));
+            assert_eq!(code.recipient, code.account);
+            assert_eq!(code.sender, "Steam <noreply@steampowered.com>");
+        }
     }
 }

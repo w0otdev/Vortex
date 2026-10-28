@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Vortex OTP</title>
+  <style>
+    @font-face { font-family: "Vortex SF Pro"; src: local("SF Pro Display Bold"), local("SFProDisplay-Bold"); font-weight: 700; }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; }
+    body { padding: 6px; font: 700 14px/1.35 "Vortex SF Pro", -apple-system, system-ui, "Segoe UI", sans-serif; color: #181816; background: transparent; }
+    button { font: inherit; color: inherit; cursor: pointer; }
+    .panel { height: 100%; display: flex; flex-direction: column; gap: 10px; padding: 12px; border: 1px solid #a5a59d; border-radius: 20px; background: #f4f4f0; box-shadow: inset 0 1px 0 #fafaf7, 0 3px 0 #8c8c84; }
+    header { display: flex; align-items: center; gap: 8px; min-width: 0; }
+    h1 { flex: 1; min-width: 0; margin: 0; font-size: 14px; }
+    .action { min-height: 34px; padding: 0 12px; border: 1px solid #a5a59d; border-radius: 999px; background: #fafaf7; box-shadow: 0 2px 0 #8c8c84; white-space: nowrap; }
+    .close { flex: 0 0 34px; width: 34px; padding: 0; font-size: 22px; line-height: 1; }
+    .action:active, .card:active { transform: translateY(1px); box-shadow: none; }
+    :focus-visible { outline: 2px solid #165640; outline-offset: 2px; }
+    .list { display: flex; gap: 10px; min-height: 0; flex: 1; overflow-x: auto; overscroll-behavior-x: contain; padding: 2px 2px 5px; }
+    .card { flex: 0 0 270px; min-width: 0; display: flex; align-items: center; gap: 12px; padding: 12px; border: 1px solid #a5a59d; border-radius: 16px; background: #fafaf7; box-shadow: 0 3px 0 #8c8c84; text-align: left; }
+    .code { flex-shrink: 0; font-size: 1.3rem; font-variant-numeric: tabular-nums; letter-spacing: .03em; }
+    .details { flex: 1; min-width: 0; }
+    .sender, .recipient, .time { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .recipient, .time { color: #52504a; font-size: 12px; }
+    .copy-icon { flex-shrink: 0; width: 18px; height: 18px; fill: currentColor; }
+    .status { position: absolute; left: 14px; bottom: 10px; max-width: calc(100% - 28px); padding: 4px 10px; border-radius: 999px; background: #181816; color: #f4f4f0; font-size: 12px; }
+    .status:empty { display: none; }
+    [hidden] { display: none !important; }
+    @media (max-width: 420px) { body { padding: 4px; } .panel { padding: 9px; gap: 8px; border-radius: 16px; } .card { flex-basis: min(255px, 100%); } h1 { font-size: 12px; } .action { padding: 0 9px; font-size: 12px; } .close { padding: 0; font-size: 22px; } }
+    @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+  </style>
+</head>
+<body>
+  <section class="panel" aria-label="Mã xác nhận đang hoạt động">
+    <header>
+      <h1 id="summary">Mã xác nhận</h1>
+      <button id="copyAll" class="action" type="button" hidden>Sao chép tất cả</button>
+      <button id="close" class="action close" type="button" aria-label="Đóng bảng mã OTP" title="Đóng">×</button>
+    </header>
+    <div id="list" class="list" aria-label="Các mã xác nhận"></div>
+    <div id="status" class="status" role="status" aria-live="polite"></div>
+  </section>
+  <script>
+  (() => {
+    const list = document.getElementById("list"), summary = document.getElementById("summary");
+    const copyAll = document.getElementById("copyAll"), status = document.getElementById("status");
+    let codes = [], previousKey = "", dismissed = false, announced = new Set(), statusTimer;
+    const signal = (action) => { if (window.ipc) window.ipc.postMessage("otp-overlay:" + action); };
+    const identity = (c) => c.code_hash || String(c.item_id) + ":" + c.code;
+    const recipient = (c) => c.recipient || c.account || "Không rõ hộp thư";
+    function notify(message) {
+      status.textContent = message;
+      clearTimeout(statusTimer);
+      statusTimer = setTimeout(() => { status.textContent = ""; }, 2200);
+    }
+    async function copy(text) {
+      try { await navigator.clipboard.writeText(text); }
+      catch (_) { notify("Không thể sao chép. Vui lòng thử lại."); return; }
+      notify("Đã sao chép");
+      fetch("/api/clipboard/copy", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code: text }) }).catch(() => {});
+    }
+    function render() {
+      const now = Math.floor(Date.now() / 1000);
+      const active = codes.filter((c) => c.expires_at > now);
+      const key = JSON.stringify(active);
+      if (key !== previousKey) {
+        previousKey = key;
+        summary.textContent = active.length + " mã xác nhận đang hoạt động";
+        copyAll.hidden = active.length < 2;
+        copyAll.onclick = () => copy(active.map((c) => recipient(c) + ": " + c.code).join("\n"));
+        list.replaceChildren();
+        active.forEach((c) => {
+          const sender = (c.sender || c.service || "Không rõ người gửi").replace(/\s*<[^>]*>\s*$/, "").replace(/^['\"]|['\"]$/g, "").trim();
+          const to = recipient(c), card = document.createElement("button");
+          card.type = "button"; card.className = "card";
+          card.setAttribute("aria-label", "Sao chép mã " + c.code + ", từ " + sender + ", gửi đến " + to);
+          card.onclick = () => copy(c.code);
+          const code = document.createElement("span"); code.className = "code"; code.textContent = c.code;
+          const details = document.createElement("span"); details.className = "details";
+          const from = document.createElement("span"); from.className = "sender"; from.textContent = sender; from.title = c.sender || sender;
+          const target = document.createElement("span"); target.className = "recipient"; target.textContent = "Đến: " + to; target.title = to;
+          const time = document.createElement("span"); time.className = "time"; time.dataset.expires = c.expires_at; time.setAttribute("aria-hidden", "true");
+          const icon = document.createElementNS("http://www.w3.org/2000/svg", "svg"); icon.setAttribute("viewBox", "0 0 20 20"); icon.setAttribute("class", "copy-icon"); icon.setAttribute("aria-hidden", "true");
+          const path = document.createElementNS("http://www.w3.org/2000/svg", "path"); path.setAttribute("d", "M7.5 2.5A2.5 2.5 0 0 0 5 5v1h7a2 2 0 0 1 2 2v7h1a2.5 2.5 0 0 0 2.5-2.5V7.3a2.5 2.5 0 0 0-.73-1.77l-2.3-2.3A2.5 2.5 0 0 0 12.7 2.5H7.5ZM3 8a1 1 0 0 1 1-1h8a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V8Z"); icon.appendChild(path);
+          details.append(from, target, time); card.append(code, details, icon); list.appendChild(card);
+        });
+      }
+      list.querySelectorAll(".time").forEach((node) => {
+        const remaining = Math.max(0, Number(node.dataset.expires) - now);
+        node.textContent = "Còn " + Math.floor(remaining / 60) + " phút " + (remaining % 60) + " giây";
+      });
+      const current = new Set(active.map(identity));
+      const hasNew = [...current].some((id) => !announced.has(id));
+      announced = current;
+      if (hasNew) { dismissed = false; signal("show"); }
+      if (!active.length && !dismissed) { dismissed = true; signal("hide"); }
+    }
+    document.getElementById("close").onclick = () => { dismissed = true; signal("hide"); };
+    document.addEventListener("keydown", (event) => { if (event.key === "Escape") { dismissed = true; signal("hide"); } });
+    let polling = false, refreshPending = false;
+    async function poll() {
+      if (polling) { refreshPending = true; return; }
+      polling = true;
+      try {
+        do {
+          refreshPending = false;
+          const response = await fetch("/api/codes", { cache: "no-store" });
+          if (response.ok) { codes = await response.json(); render(); }
+        } while (refreshPending);
+      } catch (_) {
+        // Keep the current cards until the next successful refresh.
+      } finally {
+        polling = false;
+      }
+    }
+    window.refreshOtpOverlay = poll;
+    poll(); setInterval(poll, 1500); setInterval(render, 1000);
+  })();
+  </script>
+</body>
+</html>

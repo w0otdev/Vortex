@@ -409,10 +409,11 @@ fn run_daemon(args: &[String]) -> ExitCode {
                 .unwrap_or_else(|_| bind.clone());
             let url = format!("http://{bound_addr}");
             println!("Vortex desktop app starting ({url})");
+            let desktop_state = Arc::clone(&shared);
             thread::spawn(move || {
                 let _ = run_http_daemon_with_listener(listener, shared);
             });
-            return run_native_window(&url);
+            return run_native_window(&url, desktop_state);
         }
 
         let url = format!("http://{bind}");
@@ -436,18 +437,33 @@ fn run_daemon(args: &[String]) -> ExitCode {
 }
 
 #[cfg(target_os = "windows")]
-fn run_native_window(url: &str) -> ExitCode {
+fn load_window_icon() -> Option<tao::window::Icon> {
+    const RGBA: &[u8] = include_bytes!("../vortex_icon_64.rgba");
+    tao::window::Icon::from_rgba(RGBA.to_vec(), 64, 64).ok()
+}
+
+#[cfg(target_os = "windows")]
+fn run_native_window(url: &str, state: Arc<Mutex<DaemonState>>) -> ExitCode {
     use tao::{
         dpi::{LogicalPosition, LogicalSize},
         event::{Event, StartCause, WindowEvent},
-        event_loop::{ControlFlow, EventLoop},
+        event_loop::{ControlFlow, EventLoopBuilder},
+        platform::windows::WindowBuilderExtWindows,
         window::WindowBuilder,
     };
     use wry::{WebContext, WebViewBuilder};
 
-    let event_loop = EventLoop::new();
+    enum DesktopEvent {
+        Show,
+        Hide,
+        Refresh,
+    }
+
+    let event_loop = EventLoopBuilder::<DesktopEvent>::with_user_event().build();
     let window = match WindowBuilder::new()
-        .with_title("Vortex Inbox")
+        .with_title("Vortex")
+        .with_window_icon(load_window_icon())
+        .with_taskbar_icon(load_window_icon())
         .with_inner_size(LogicalSize::new(1260.0, 820.0))
         .with_position(LogicalPosition::new(80.0, 50.0))
         .with_visible(true)
@@ -474,6 +490,82 @@ fn run_native_window(url: &str) -> ExitCode {
         }
     };
 
+    let overlay_layout = |window: &tao::window::Window| {
+        window.current_monitor().map(|monitor| {
+            let scale = monitor.scale_factor();
+            let size = monitor.size().to_logical::<f64>(scale);
+            let position = monitor.position().to_logical::<f64>(scale);
+            let width = (size.width - 40.0).clamp(1.0, 1280.0);
+            let height: f64 = if width < 640.0 { 208.0 } else { 185.0 };
+            let height = height.min((size.height - 40.0).max(1.0));
+            let x = position.x + (size.width - width) / 2.0;
+            let y = position.y + (size.height - height - 72.0).max(0.0);
+            (width, height, LogicalPosition::new(x, y))
+        }).unwrap_or((900.0, 185.0, LogicalPosition::new(80.0, 500.0)))
+    };
+    let (overlay_width, overlay_height, overlay_position) = overlay_layout(&window);
+
+    let overlay_window = match WindowBuilder::new()
+        .with_title("Vortex OTP")
+        .with_inner_size(LogicalSize::new(overlay_width, overlay_height))
+        .with_position(overlay_position)
+        .with_decorations(false)
+        .with_resizable(false)
+        .with_visible(false)
+        .with_focused(false)
+        .with_always_on_top(true)
+        .with_skip_taskbar(true)
+        .build(&event_loop)
+    {
+        Ok(w) => w,
+        Err(e) => {
+            eprintln!("failed creating OTP overlay: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let overlay_proxy = event_loop.create_proxy();
+    let overlay_url = format!("{url}/otp-overlay");
+    let overlay_webview = match WebViewBuilder::with_web_context(&mut web_context)
+        .with_url(&overlay_url)
+        .with_ipc_handler(move |request| {
+            let event = match request.body().as_str() {
+                "otp-overlay:show" => DesktopEvent::Show,
+                "otp-overlay:hide" => DesktopEvent::Hide,
+                _ => return,
+            };
+            let _ = overlay_proxy.send_event(event);
+        })
+        .build(&overlay_window)
+    {
+        Ok(view) => view,
+        Err(e) => {
+            eprintln!("failed initializing OTP overlay: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    // Wake the overlay on changes even when WebView2 throttles hidden-page timers.
+    let refresh_proxy = event_loop.create_proxy();
+    thread::spawn(move || {
+        let mut previous = Vec::new();
+        loop {
+            let current = state.lock().ok().and_then(|guard| {
+                guard.store.list_recent_codes(now_epoch()).ok().map(|codes| {
+                    codes.into_iter().map(|code| code.code_hash).collect::<Vec<_>>()
+                })
+            });
+            if let Some(current) = current
+                && current != previous
+            {
+                previous = current;
+                if refresh_proxy.send_event(DesktopEvent::Refresh).is_err() {
+                    break;
+                }
+            }
+            thread::sleep(Duration::from_secs(1));
+        }
+    });
+
     window.set_minimized(false);
     window.set_visible(false);
     window.set_visible(true);
@@ -482,7 +574,7 @@ fn run_native_window(url: &str) -> ExitCode {
 
     let mut topped_cleared = false;
     event_loop.run(move |event, _, control_flow| {
-        let _ = (&webview, &web_context);
+        let _ = (&webview, &overlay_webview, &web_context);
         *control_flow = ControlFlow::Wait;
         match event {
             Event::NewEvents(StartCause::Init) | Event::Resumed => {
@@ -496,19 +588,37 @@ fn run_native_window(url: &str) -> ExitCode {
                 window.set_always_on_top(false);
                 window.set_focus();
             }
+            Event::UserEvent(DesktopEvent::Show) => {
+                let (width, height, position) = overlay_layout(&window);
+                overlay_window.set_inner_size(LogicalSize::new(width, height));
+                overlay_window.set_outer_position(position);
+                overlay_window.set_visible(true);
+            }
+            Event::UserEvent(DesktopEvent::Hide) => {
+                overlay_window.set_visible(false);
+            }
+            Event::UserEvent(DesktopEvent::Refresh) => {
+                let _ = overlay_webview.evaluate_script("window.refreshOtpOverlay?.()");
+            }
             Event::WindowEvent {
                 event: WindowEvent::CloseRequested,
+                window_id,
                 ..
-            } => {
+            } if window_id == window.id() => {
                 *control_flow = ControlFlow::Exit;
             }
+            Event::WindowEvent {
+                event: WindowEvent::CloseRequested,
+                window_id,
+                ..
+            } if window_id == overlay_window.id() => overlay_window.set_visible(false),
             _ => {}
         }
     });
 }
 
 #[cfg(not(target_os = "windows"))]
-fn run_native_window(_url: &str) -> ExitCode {
+fn run_native_window(_url: &str, _state: Arc<Mutex<DaemonState>>) -> ExitCode {
     loop {
         thread::sleep(Duration::from_secs(3600));
     }
@@ -852,7 +962,7 @@ fn run_google_login_window(args: &[String]) -> ExitCode {
     }}
 
     if (location.hostname.includes("accounts.google.com")) {{
-      ensureHelperBar("Vortex Inbox: Chọn hoặc đăng nhập tài khoản Google của bạn.");
+      ensureHelperBar("Vortex: Chọn hoặc đăng nhập tài khoản Google của bạn.");
       detectEmail("");
       return;
     }}
@@ -913,7 +1023,8 @@ fn run_google_login_window(args: &[String]) -> ExitCode {
     let event_loop = EventLoop::new();
     let proxy = event_loop.create_proxy();
     let mut wb = WindowBuilder::new()
-        .with_title("Đăng nhập với Google - Vortex Inbox")
+        .with_title("Đăng nhập với Google - Vortex")
+        .with_window_icon(load_window_icon())
         .with_inner_size(LogicalSize::new(520.0, 680.0));
     wb = if silent {
         wb.with_position(LogicalPosition::new(-10000.0, -10000.0))

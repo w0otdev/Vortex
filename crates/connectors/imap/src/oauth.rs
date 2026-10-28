@@ -130,7 +130,7 @@ pub fn wait_for_loopback_oauth_code(
         }
     }
 
-    let response = "HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nConnection: close\r\n\r\nVortex Inbox authentication completed. You may close this tab.";
+    let response = "HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nConnection: close\r\n\r\nVortex authentication completed. You may close this tab.";
     let _ = stream.write_all(response.as_bytes());
 
     if state.as_deref() != Some(expected_state) {

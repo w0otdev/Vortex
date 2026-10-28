@@ -2,32 +2,155 @@ pub const STYLES_CSS: &str = r##"/* hallmark · v2.0.0 · shape: app screen · g
 /* critique: calm two-pane casual inbox with centered single-purpose onboarding card and Heroicons 20/solid glyphs */
 /* waive: custom-app-workbench */
 
+@font-face {
+  font-family: "Vortex SF Pro";
+  src: local("SF Pro Display Bold"), local("SFProDisplay-Bold");
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+}
+
 :root {
-  --bg-page: #f5f4f0;
-  --bg-surface: #ffffff;
-  --bg-subtle: #ebe9e2;
-  --bg-inverse: #181816;
-  --bg-alert: #fdf2f0;
-  --bg-notice: #eaf4ee;
-  --bg-backdrop: rgba(24, 24, 22, 0.45);
+  --bg-page: #e4e4e0;
+  --bg-surface: #f4f4f0;
+  --bg-elevated: #fafaf7;
+  --bg-subtle: #d6d6d0;
+  --bg-inverse: #1a1a18;
+  --bg-alert: #f2dede;
+  --bg-notice: #e6e6e1;
+  --bg-backdrop: rgba(24, 24, 22, 0.55);
   --text-primary: #181816;
-  --text-secondary: #52504a;
-  --text-muted: #7a7870;
-  --text-inverse: #f5f4f0;
-  --text-danger: #a12c2c;
-  --text-accent: #165640;
-  --border-subtle: #e0ddd3;
-  --border-strong: #181816;
-  --border-danger: #cf5252;
-  --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  --font-mono: ui-monospace, "Cascadia Mono", "SFMono-Regular", Consolas, monospace;
-  --radius-base: 8px;
+  --text-secondary: #383835;
+  --text-muted: #5c5c57;
+  --text-inverse: #f4f4f0;
+  --text-danger: #8f2424;
+  --text-accent: #181816;
+  --border-subtle: #b5b5ae;
+  --border-strong: #1a1a18;
+  --border-danger: #b83c3c;
+  --font-sans: "Vortex SF Pro", -apple-system, system-ui, "Segoe UI", Roboto, sans-serif;
+  --font-mono: var(--font-sans);
+  --radius-base: 10px;
   --container-max: 1280px;
   --col-gap: 16px;
+  --glass-surface: #f4f4f0;
+  --glass-edge: #9e9e96;
+  --bevel-top: #fcfcf9;
+  --bevel-bottom: #dcdcd4;
+  --pill-ledge: #8c8c84;
+  --pill-ledge-strong: #0e0e0d;
+  --shadow-ambient: rgba(24, 24, 22, 0.12);
+  --glass-shadow: inset 0 1.5px 0 var(--bevel-top), inset 0 -1px 0 var(--bevel-bottom), 0 3px 0 var(--pill-ledge), 0 7px 14px var(--shadow-ambient);
+  --btn-3d-shadow: inset 0 1.5px 0 var(--bevel-top), inset 0 -1px 0 var(--bevel-bottom), 0 3px 0 var(--pill-ledge), 0 4px 8px var(--shadow-ambient);
+  --btn-3d-hover-shadow: inset 0 1.5px 0 var(--bevel-top), inset 0 -1px 0 var(--bevel-bottom), 0 4px 0 var(--pill-ledge), 0 7px 12px var(--shadow-ambient);
+  --btn-3d-active-shadow: inset 0 1px 0 var(--bevel-bottom), 0 1px 0 var(--pill-ledge), 0 2px 4px var(--shadow-ambient);
+  --btn-primary-shadow: inset 0 1.5px 0 rgba(244, 244, 240, 0.22), inset 0 -1px 0 rgba(14, 14, 13, 0.5), 0 3px 0 var(--pill-ledge-strong), 0 5px 10px var(--shadow-ambient);
+  --btn-primary-active-shadow: inset 0 1px 0 rgba(14, 14, 13, 0.6), 0 1px 0 var(--pill-ledge-strong);
+  --glider-surface: #1c1c1a;
+  --glider-text: #f4f4f0;
+  --glider-edge: #121210;
+  --glider-shadow: inset 0 1.5px 0 rgba(244, 244, 240, 0.24), inset 0 -1px 0 rgba(14, 14, 13, 0.6), 0 2.5px 0 #0e0e0d, 0 5px 10px rgba(24, 24, 22, 0.18);
+  --glass-hover: rgba(24, 24, 22, 0.07);
+  --glass-selected: #dfdfd9;
+  --row-border: #d0d0c8;
+  --row-hover: #eaeae4;
+  --row-selected: #dcdcd4;
+  --scrollbar-thumb: #9e9e95;
+  --scrollbar-thumb-hover: #62625b;
+  --scrollbar-thumb-active: #1a1a18;
+}
+
+[data-theme="dark"] {
+  --bg-page: #121211;
+  --bg-surface: #1b1b19;
+  --bg-elevated: #232320;
+  --bg-subtle: #282825;
+  --bg-inverse: #ecece6;
+  --bg-alert: #2e1b1b;
+  --bg-notice: #242421;
+  --bg-backdrop: rgba(12, 12, 11, 0.72);
+  --text-primary: #ecece6;
+  --text-secondary: #bdbdb6;
+  --text-muted: #8a8a82;
+  --text-inverse: #161614;
+  --text-danger: #e07070;
+  --text-accent: #ecece6;
+  --border-subtle: #3a3a36;
+  --border-strong: #ecece6;
+  --border-danger: #b84a4a;
+  --glass-surface: #20201e;
+  --glass-edge: #3e3e39;
+  --bevel-top: rgba(236, 236, 230, 0.14);
+  --bevel-bottom: rgba(11, 11, 10, 0.65);
+  --pill-ledge: #0c0c0b;
+  --pill-ledge-strong: #8e8e86;
+  --shadow-ambient: rgba(10, 10, 9, 0.55);
+  --glass-shadow: inset 0 1.5px 0 var(--bevel-top), inset 0 -1px 0 var(--bevel-bottom), 0 3px 0 var(--pill-ledge), 0 8px 16px var(--shadow-ambient);
+  --btn-3d-shadow: inset 0 1.5px 0 var(--bevel-top), inset 0 -1px 0 var(--bevel-bottom), 0 3px 0 var(--pill-ledge), 0 5px 10px var(--shadow-ambient);
+  --btn-3d-hover-shadow: inset 0 1.5px 0 var(--bevel-top), inset 0 -1px 0 var(--bevel-bottom), 0 4px 0 var(--pill-ledge), 0 8px 14px var(--shadow-ambient);
+  --btn-3d-active-shadow: inset 0 1px 0 var(--bevel-bottom), 0 1px 0 var(--pill-ledge), 0 2px 4px var(--shadow-ambient);
+  --btn-primary-shadow: inset 0 1.5px 0 #fafaf5, inset 0 -1px 0 #c8c8c0, 0 3px 0 var(--pill-ledge-strong), 0 6px 12px var(--shadow-ambient);
+  --btn-primary-active-shadow: inset 0 1px 0 #b8b8b0, 0 1px 0 var(--pill-ledge-strong);
+  --glider-surface: #ecece6;
+  --glider-text: #161614;
+  --glider-edge: #f4f4ee;
+  --glider-shadow: inset 0 1.5px 0 #fafaf5, inset 0 -1px 0 #c6c6be, 0 2.5px 0 #8a8a82, 0 5px 12px rgba(10, 10, 9, 0.55);
+  --glass-hover: rgba(236, 236, 230, 0.08);
+  --glass-selected: #2f2f2b;
+  --row-border: #2d2d29;
+  --row-hover: #232320;
+  --row-selected: #2d2d29;
+  --scrollbar-thumb: #4e4e48;
+  --scrollbar-thumb-hover: #7c7c74;
+  --scrollbar-thumb-active: #ecece6;
 }
 
 *, *::before, *::after {
   box-sizing: border-box;
+}
+
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 0 !important;
+  background: transparent;
+}
+
+*::-webkit-scrollbar:horizontal {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+}
+
+*::-webkit-scrollbar-button {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+  margin-block: 6px;
+}
+
+*::-webkit-scrollbar-corner {
+  background: transparent;
+  display: none !important;
+}
+
+*::-webkit-scrollbar-thumb {
+  background-color: var(--scrollbar-thumb);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+  min-height: 36px;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background-color: var(--scrollbar-thumb-hover);
+}
+
+*::-webkit-scrollbar-thumb:active {
+  background-color: var(--scrollbar-thumb-active);
 }
 
 html, body {
@@ -39,13 +162,14 @@ html, body {
   background-color: var(--bg-page);
   color: var(--text-primary);
   font-family: var(--font-sans);
+  font-weight: 700;
   font-size: 16px;
   line-height: 1.5;
 }
 
 h1, h2, h3 {
   margin: 0;
-  font-weight: 600;
+  font-weight: 700;
   color: var(--text-primary);
   overflow-wrap: break-word;
   min-width: 0;
@@ -58,6 +182,7 @@ p {
 
 button, input, select, textarea {
   font-family: var(--font-sans);
+  font-weight: 700;
   font-size: 0.9375rem;
   color: var(--text-primary);
 }
@@ -99,69 +224,75 @@ button, input, select, textarea {
 @keyframes rowFadeUp {
   0% {
     opacity: 0;
-    transform: translate3d(-12px, 12px, 0) scale(0.984);
-    filter: blur(3px);
-  }
-  65% {
-    opacity: 1;
-    filter: blur(0);
+    transform: translate3d(0, 8px, 0);
   }
   100% {
     opacity: 1;
-    transform: translate3d(0, 0, 0) scale(1);
-    filter: blur(0);
+    transform: translate3d(0, 0, 0);
   }
 }
 
 @keyframes readerStageIn {
   0% {
     opacity: 0;
-    transform: translate3d(0, 18px, 0) scale(0.986);
-    filter: blur(5px);
-  }
-  60% {
-    opacity: 1;
-    filter: blur(0.6px);
+    transform: translate3d(0, 12px, 0);
   }
   100% {
     opacity: 1;
-    transform: translate3d(0, 0, 0) scale(1);
-    filter: blur(0);
+    transform: translate3d(0, 0, 0);
   }
 }
 
 @keyframes readerCanvasUnfold {
   0% {
     opacity: 0;
-    transform: perspective(900px) translate3d(0, 26px, 0) rotateX(2.2deg) scale(0.982);
-    filter: blur(6px);
-  }
-  65% {
-    opacity: 1;
-    filter: blur(0.5px);
+    transform: translate3d(0, 16px, 0);
   }
   100% {
     opacity: 1;
-    transform: perspective(900px) translate3d(0, 0, 0) rotateX(0deg) scale(1);
-    filter: blur(0);
+    transform: translate3d(0, 0, 0);
   }
 }
 
 @keyframes panelEnter {
   from {
     opacity: 0;
-    transform: scale(0.978) translateY(14px);
-    filter: blur(4px);
+    transform: translateY(12px);
   }
   to {
     opacity: 1;
-    transform: scale(1) translateY(0);
-    filter: blur(0);
+    transform: translateY(0);
   }
 }
 
 .is-spinning .hi-icon {
   animation: spin 700ms linear infinite;
+}
+
+@keyframes syncPop {
+  0% {
+    transform: scale(0.55) rotate(-18deg);
+    opacity: 0;
+  }
+  55% {
+    transform: scale(1.18) rotate(0deg);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(1) rotate(0deg);
+    opacity: 1;
+  }
+}
+
+.topbar .refresh-btn.is-synced {
+  background: var(--bg-inverse);
+  color: var(--text-inverse);
+  border-color: var(--border-strong);
+  box-shadow: var(--btn-primary-shadow);
+}
+
+.topbar .refresh-btn.is-synced .hi-icon {
+  animation: syncPop 380ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
 }
 
 .shell {
@@ -175,14 +306,25 @@ button, input, select, textarea {
 }
 
 .topbar {
+  position: relative;
+  z-index: 10;
   flex-shrink: 0;
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: auto minmax(200px, 1fr) auto auto;
   align-items: center;
-  justify-content: space-between;
-  gap: 12px 16px;
-  padding-bottom: 12px;
-  border-bottom: 1px solid var(--border-subtle);
+  gap: 12px;
+  padding: 4px 0 12px;
+}
+
+/* Each floating glass capsule contains one family of controls. */
+.glass-pill {
+  background: var(--glass-surface);
+  border: 1px solid var(--glass-edge);
+  border-radius: 999px;
+  box-shadow: var(--glass-shadow);
+  -webkit-backdrop-filter: blur(24px) saturate(140%);
+  backdrop-filter: blur(24px) saturate(140%);
+  transition: transform 160ms cubic-bezier(0.22, 1, 0.36, 1), box-shadow 160ms ease, background-color 160ms ease, border-color 160ms ease;
 }
 
 .brand-mark {
@@ -194,20 +336,28 @@ button, input, select, textarea {
   flex-shrink: 0;
 }
 
+.brand-mark > .hi-icon-lg {
+  width: 28px;
+  height: 28px;
+  color: var(--text-primary);
+}
+
 .brand-title {
-  font-size: 1.25rem;
+  font-size: 1.125rem;
+  letter-spacing: -0.035em;
 }
 
 .search-wrap {
   position: relative;
-  flex: 1 1 260px;
-  max-width: 460px;
-  min-width: 200px;
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  padding: 4px;
 }
 
-.search-wrap .hi-icon {
+.search-wrap > .hi-icon {
   position: absolute;
-  left: 12px;
+  left: 16px;
   top: 50%;
   transform: translateY(-50%);
   color: var(--text-muted);
@@ -215,7 +365,7 @@ button, input, select, textarea {
   transition: color 150ms ease;
 }
 
-.search-wrap:focus-within .hi-icon {
+.search-wrap:focus-within > .hi-icon {
   color: var(--text-accent);
 }
 
@@ -226,25 +376,137 @@ button, input, select, textarea {
   background-color: var(--bg-surface);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-base);
+  box-shadow: inset 0 2px 4px var(--shadow-ambient);
   transition: border-color 150ms ease, box-shadow 150ms ease;
 }
 
 .input-field:focus {
   border-color: var(--text-accent);
-  box-shadow: 0 0 0 3px rgba(22, 86, 64, 0.12);
+  box-shadow: 0 0 0 3px var(--glass-hover);
   outline: none;
 }
 
 .search-wrap .input-field {
-  padding-left: 38px;
+  min-width: 0;
+  min-height: 40px;
+  padding: 8px 12px 8px 40px;
+  background: transparent;
+  border: 0;
+  border-radius: 999px;
+  font-size: 0.875rem;
+  box-shadow: none;
 }
 
-.top-actions {
+.search-wrap:focus-within {
+  outline: 2px solid var(--text-accent);
+  outline-offset: 2px;
+}
+
+.mailbox-controls {
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  min-width: 0;
+  gap: 6px;
+  padding: 5px;
+}
+
+.topbar .btn {
+  min-height: 38px;
+  padding-inline: 13px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: transparent;
+  box-shadow: none;
+  font-size: 0.8125rem;
+  font-weight: 700;
+}
+
+.topbar .btn:hover {
+  background: var(--glass-selected);
+  border-color: var(--glass-edge);
+  box-shadow: inset 0 1px 0 var(--bevel-top), 0 2px 0 var(--pill-ledge);
+  transform: translateY(-1px);
+}
+
+.topbar .btn:active {
+  transform: translateY(1px);
+  box-shadow: inset 0 1px 2px var(--shadow-ambient);
+}
+
+.topbar .refresh-btn {
   flex-shrink: 0;
+  width: 38px;
+  padding: 0;
+  color: var(--text-accent);
+  background: var(--bg-elevated);
+  border: 1px solid var(--glass-edge);
+  box-shadow: inset 0 1px 0 var(--bevel-top), 0 2px 0 var(--pill-ledge);
+}
+
+.topbar .refresh-btn:hover {
+  background: var(--glass-selected);
+  transform: translateY(-1px);
+  box-shadow: inset 0 1px 0 var(--bevel-top), 0 3px 0 var(--pill-ledge);
+}
+
+.topbar .refresh-btn:active {
+  transform: translateY(1.5px);
+  box-shadow: 0 0.5px 0 var(--pill-ledge);
+}
+
+.topbar .btn-primary {
+  background: var(--bg-inverse);
+  color: var(--text-inverse);
+  border: 1px solid var(--border-strong);
+  box-shadow: var(--btn-primary-shadow);
+}
+
+.topbar .btn-primary:hover {
+  background: var(--bg-inverse);
+  border-color: var(--border-strong);
+  box-shadow: var(--btn-primary-shadow);
+  opacity: 0.94;
+  transform: translateY(-1px);
+}
+
+.topbar .btn-primary:active {
+  transform: translateY(2px);
+  box-shadow: var(--btn-primary-active-shadow);
+}
+
+.language-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px;
+}
+
+#btnTheme {
+  min-width: 82px;
+  justify-content: center;
+}
+
+#btnLang {
+  min-width: 66px;
+  justify-content: center;
+}
+
+.topbar .acct-trigger {
+  max-width: 210px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--glass-edge);
+  box-shadow: inset 0 1px 0 var(--bevel-top), 0 2px 0 var(--pill-ledge);
+}
+
+.acct-chevron {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+  transition: transform 180ms ease;
+}
+
+.acct-trigger[aria-expanded="true"] .acct-chevron {
+  transform: rotate(180deg);
 }
 
 .btn {
@@ -255,22 +517,25 @@ button, input, select, textarea {
   gap: 8px;
   min-height: 38px;
   padding: 0 14px;
-  background-color: var(--bg-surface);
+  background-color: var(--bg-elevated);
   color: var(--text-primary);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-base);
+  border: 1px solid var(--glass-edge);
+  border-radius: 999px;
+  box-shadow: var(--btn-3d-shadow);
   white-space: nowrap;
   cursor: pointer;
-  transition: transform 140ms cubic-bezier(0.22, 1, 0.36, 1), background-color 140ms ease, border-color 140ms ease, opacity 140ms ease;
+  transition: transform 140ms cubic-bezier(0.22, 1, 0.36, 1), box-shadow 140ms ease, background-color 140ms ease, border-color 140ms ease, opacity 140ms ease;
 }
 
 .btn:hover {
-  background-color: var(--bg-subtle);
-  transform: translateY(-1px);
+  background-color: var(--glass-selected);
+  box-shadow: var(--btn-3d-hover-shadow);
+  transform: translateY(-1.5px);
 }
 
 .btn:active {
-  transform: translateY(0) scale(0.97);
+  transform: translateY(2px);
+  box-shadow: var(--btn-3d-active-shadow);
 }
 
 .btn:disabled {
@@ -282,12 +547,19 @@ button, input, select, textarea {
   background-color: var(--bg-inverse);
   color: var(--text-inverse);
   border-color: var(--border-strong);
-  font-weight: 500;
+  box-shadow: var(--btn-primary-shadow);
+  font-weight: 700;
 }
 
 .btn-primary:hover {
-  opacity: 0.92;
+  opacity: 0.94;
   background-color: var(--bg-inverse);
+  box-shadow: var(--btn-primary-shadow);
+}
+
+.btn-primary:active {
+  transform: translateY(2px);
+  box-shadow: var(--btn-primary-active-shadow);
 }
 
 .btn-large {
@@ -301,15 +573,22 @@ button, input, select, textarea {
   min-height: 46px;
   margin-top: 18px;
   font-size: 1rem;
-  font-weight: 600;
-  background-color: var(--text-accent);
+  font-weight: 700;
+  background-color: var(--bg-inverse);
   color: var(--text-inverse);
-  border-color: var(--text-accent);
+  border-color: var(--border-strong);
+  box-shadow: var(--btn-primary-shadow);
 }
 
 .btn-google:hover {
-  opacity: 0.92;
-  background-color: var(--text-accent);
+  opacity: 0.94;
+  background-color: var(--bg-inverse);
+  box-shadow: var(--btn-primary-shadow);
+}
+
+.btn-google:active {
+  transform: translateY(2px);
+  box-shadow: var(--btn-primary-active-shadow);
 }
 
 .divider-caption {
@@ -329,6 +608,7 @@ button, input, select, textarea {
 .btn-ghost {
   background-color: transparent;
   border-color: transparent;
+  box-shadow: none;
   color: var(--text-secondary);
 }
 
@@ -337,78 +617,8 @@ button, input, select, textarea {
   color: var(--text-primary);
 }
 
-/* Instant Multi-Account OTP Banner */
-.otp-banner {
-  flex-shrink: 0;
-  margin-top: 12px;
-  padding: 10px 16px;
-  background-color: var(--bg-notice);
-  border: 1px solid var(--text-accent);
-  border-radius: var(--radius-base);
-  max-height: 220px;
-  overflow-y: auto;
-}
-
-.otp-banner-head {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px 12px;
-  padding-bottom: 8px;
-  margin-bottom: 4px;
-  border-bottom: 1px solid var(--border-subtle);
-  font-size: 0.8125rem;
-  font-weight: 600;
-  color: var(--text-accent);
-}
-
-.otp-list {
-  display: flex;
-  flex-direction: column;
-}
-
-.otp-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px 16px;
-  padding: 8px 0;
-  border-bottom: 1px solid var(--border-subtle);
-}
-
-.otp-row:last-child {
-  border-bottom: none;
-  padding-bottom: 2px;
-}
-
-.otp-banner-left {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  min-width: 0;
-}
-
-.otp-code-value {
-  font-family: var(--font-mono);
-  font-size: 1.625rem;
-  font-weight: 700;
-  color: var(--text-accent);
-  font-variant-numeric: tabular-nums;
-  letter-spacing: 0.02em;
-}
-
-.otp-account-name {
-  font-size: 0.875rem;
-  font-weight: 600;
-  color: var(--text-primary);
-}
-
-.otp-meta {
-  font-size: 0.8125rem;
-  color: var(--text-secondary);
-}
+/* OTP dock */
+.otp-meta { font-size: .8125rem; color: var(--text-secondary); }
 
 /* Onboarding / Account Manager Centered View */
 .onboarding-wrap {
@@ -418,8 +628,9 @@ button, input, select, textarea {
   overflow-y: auto;
   margin: 16px auto 0;
   background-color: var(--bg-surface);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-base);
+  border: 1px solid var(--glass-edge);
+  border-radius: 20px;
+  box-shadow: var(--glass-shadow);
   padding: 24px 28px;
   animation: panelEnter 240ms cubic-bezier(0.22, 1, 0.36, 1);
 }
@@ -445,13 +656,13 @@ button, input, select, textarea {
   margin-top: 18px;
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
+  gap: 10px;
 }
 
 .provider-grid {
   margin-top: 16px;
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 10px;
 }
 
@@ -461,31 +672,41 @@ button, input, select, textarea {
   align-items: center;
   justify-content: center;
   gap: 8px;
-  min-height: 40px;
-  padding: 0 12px;
-  background-color: var(--bg-page);
+  min-height: 42px;
+  padding: 0 14px;
+  background-color: var(--bg-elevated);
   color: var(--text-primary);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-base);
+  border: 1px solid var(--glass-edge);
+  border-radius: 999px;
+  box-shadow: var(--btn-3d-shadow);
   font-size: 0.9375rem;
+  font-weight: 700;
   cursor: pointer;
-  transition: transform 140ms cubic-bezier(0.22, 1, 0.36, 1), background-color 140ms ease, color 140ms ease, border-color 140ms ease;
+  transition: transform 140ms cubic-bezier(0.22, 1, 0.36, 1), box-shadow 140ms ease, background-color 140ms ease, color 140ms ease, border-color 140ms ease;
 }
 
 .preset-btn:hover {
-  background-color: var(--bg-subtle);
-  transform: translateY(-1px);
+  background-color: var(--glass-selected);
+  box-shadow: var(--btn-3d-hover-shadow);
+  transform: translateY(-1.5px);
 }
 
 .preset-btn:active {
-  transform: scale(0.97);
+  transform: translateY(2px);
+  box-shadow: var(--btn-3d-active-shadow);
 }
 
 .preset-btn[aria-pressed="true"] {
   background-color: var(--bg-inverse);
   color: var(--text-inverse);
   border-color: var(--border-strong);
-  font-weight: 600;
+  box-shadow: var(--btn-primary-shadow);
+  font-weight: 700;
+}
+
+.preset-btn[aria-pressed="true"]:active {
+  transform: translateY(2px);
+  box-shadow: var(--btn-primary-active-shadow);
 }
 
 .form-stack {
@@ -506,7 +727,7 @@ button, input, select, textarea {
 .field-label {
   display: block;
   font-size: 0.875rem;
-  font-weight: 500;
+  font-weight: 700;
   color: var(--text-primary);
   margin-bottom: 6px;
 }
@@ -547,13 +768,13 @@ button, input, select, textarea {
   position: absolute;
   top: calc(100% + 6px);
   right: 0;
-  width: 320px;
+  width: min(340px, calc(100dvw - 40px));
   max-height: 400px;
   overflow-y: auto;
   background-color: var(--bg-surface);
   border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-base);
-  padding: 6px;
+  border-radius: 24px;
+  padding: 10px;
   z-index: 850;
   box-shadow: 0 12px 32px rgba(24, 24, 22, 0.14);
   animation: panelEnter 180ms cubic-bezier(0.16, 1, 0.3, 1);
@@ -601,7 +822,7 @@ button, input, select, textarea {
 }
 
 .acct-item-wrap[data-active="true"] .acct-item-btn {
-  font-weight: 600;
+  font-weight: 700;
 }
 
 .acct-item-main {
@@ -626,7 +847,7 @@ button, input, select, textarea {
 
 .acct-item-sub {
   font-size: 0.75rem;
-  font-weight: 400;
+  font-weight: 700;
   color: var(--text-muted);
   line-height: 1.3;
 }
@@ -698,23 +919,17 @@ button, input, select, textarea {
 @keyframes catStreamMorph {
   0% {
     opacity: 0;
-    transform: translate3d(calc(var(--cat-dir, 1) * 18px), 8px, 0) scale(0.985);
-    filter: blur(4px);
-  }
-  65% {
-    opacity: 1;
-    filter: blur(0);
+    transform: translate3d(0, 6px, 0);
   }
   100% {
     opacity: 1;
-    transform: translate3d(0, 0, 0) scale(1);
-    filter: blur(0);
+    transform: translate3d(0, 0, 0);
   }
 }
 
 .filter-bar {
   flex-shrink: 0;
-  margin-top: 10px;
+  margin-top: 4px;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -726,30 +941,76 @@ button, input, select, textarea {
   display: flex;
   align-items: center;
   gap: 10px;
+  margin-left: auto;
+  min-width: 0;
+}
+
+.filter-bar-right .sort-btn {
+  border-radius: 999px;
+  border-color: var(--glass-edge);
+  background: var(--bg-elevated);
+  box-shadow: var(--btn-3d-shadow);
+  min-height: 46px;
+  padding-inline: 18px;
+  font-size: 0.8125rem;
+  font-weight: 700;
+}
+
+.filter-bar-right .sort-btn:hover {
+  background-color: var(--glass-selected);
+  box-shadow: var(--btn-3d-hover-shadow);
+  transform: translateY(-1.5px);
+}
+
+.filter-bar-right .sort-btn:active {
+  transform: translateY(2px);
+  box-shadow: var(--btn-3d-active-shadow);
+}
+
+#statusNotice {
+  display: none !important;
 }
 
 .sort-btn[aria-pressed="true"] {
-  background-color: var(--accent-soft);
-  color: var(--text-accent);
-  border-color: var(--accent-primary);
-  font-weight: 600;
+  background-color: var(--bg-inverse);
+  color: var(--text-inverse);
+  border-color: var(--border-strong);
+  box-shadow: var(--btn-primary-shadow);
+  font-weight: 700;
+}
+
+.sort-btn[aria-pressed="true"]:hover {
+  background-color: var(--bg-inverse);
+  color: var(--text-inverse);
+  box-shadow: var(--btn-primary-shadow);
+}
+
+.sort-btn[aria-pressed="true"]:active {
+  transform: translateY(2px);
+  box-shadow: var(--btn-primary-active-shadow);
 }
 
 .sort-btn[aria-pressed="true"] .hi-icon {
-  color: var(--text-accent);
+  color: var(--text-inverse);
   animation: catIconSpring 460ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .category-pills {
   position: relative;
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
-  gap: 4px;
-  padding: 3px;
-  background-color: var(--bg-subtle);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-base);
+  gap: 5px;
+  max-width: 100%;
+  min-width: 0;
+  padding: 5px;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+}
+
+.category-pills::-webkit-scrollbar {
+  display: none;
 }
 
 .cat-glider {
@@ -758,10 +1019,10 @@ button, input, select, textarea {
   left: 0;
   width: 0;
   height: 0;
-  background-color: var(--bg-surface);
-  border: 1px solid var(--border-subtle);
-  border-radius: 6px;
-  box-shadow: 0 2px 8px rgba(24, 24, 22, 0.06);
+  background-color: var(--glider-surface);
+  border: 1px solid var(--glider-edge);
+  border-radius: 999px;
+  box-shadow: var(--glider-shadow);
   pointer-events: none;
   z-index: 0;
   opacity: 0;
@@ -775,50 +1036,78 @@ button, input, select, textarea {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  min-height: 32px;
-  padding: 0 12px;
+  flex-shrink: 0;
+  min-height: 38px;
+  padding: 0 13px;
   background-color: transparent;
   color: var(--text-secondary);
   border: 1px solid transparent;
-  border-radius: 6px;
-  font-size: 0.875rem;
+  border-radius: 999px;
+  font-size: 0.8125rem;
+  font-weight: 700;
+  white-space: nowrap;
   cursor: pointer;
-  transition: transform 180ms cubic-bezier(0.16, 1, 0.3, 1), color 200ms ease, background-color 180ms ease;
+  transition: transform 160ms cubic-bezier(0.16, 1, 0.3, 1), color 200ms ease, background-color 160ms ease, box-shadow 160ms ease, border-color 160ms ease;
 }
 
 .cat-btn:hover {
   color: var(--text-primary);
+  background-color: var(--glass-selected);
+  border-color: var(--glass-edge);
+  box-shadow: inset 0 1px 0 var(--bevel-top), 0 2px 0 var(--pill-ledge);
+  transform: translateY(-1px);
 }
 
 .cat-btn:active {
-  transform: scale(0.95);
+  transform: translateY(1.5px);
+  box-shadow: 0 0.5px 0 var(--pill-ledge);
 }
 
 .cat-btn[aria-pressed="true"] {
-  color: var(--text-primary);
-  font-weight: 600;
+  color: var(--glider-text);
+  font-weight: 700;
+}
+
+.cat-btn[aria-pressed="true"]:hover {
+  color: var(--glider-text);
+  background-color: transparent;
+  border-color: transparent;
+  box-shadow: none;
+  transform: none;
 }
 
 .cat-btn.is-glider-fallback[aria-pressed="true"] {
-  background-color: var(--bg-surface);
-  border-color: var(--border-subtle);
+  background-color: var(--glider-surface);
+  color: var(--glider-text);
+  border-color: var(--glider-edge);
+  box-shadow: var(--glider-shadow);
 }
 
 .cat-btn[aria-pressed="true"] .hi-icon {
-  color: var(--text-accent);
+  color: var(--glider-text);
   animation: catIconSpring 460ms cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .cat-count {
+  min-width: 18px;
+  padding-inline: 5px;
+  border-radius: 999px;
+  background: var(--glass-selected);
   font-size: 0.75rem;
+  font-weight: 700;
   font-variant-numeric: tabular-nums;
-  color: var(--text-muted);
-  transition: color 200ms ease, transform 240ms cubic-bezier(0.16, 1, 0.3, 1);
+  color: var(--text-secondary);
+  transition: color 200ms ease, background-color 200ms ease, transform 240ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.cat-count:empty {
+  display: none;
 }
 
 .cat-btn[aria-pressed="true"] .cat-count {
-  color: var(--text-accent);
-  font-weight: 600;
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  font-weight: 700;
 }
 
 .stream-list.is-cat-switching {
@@ -841,16 +1130,20 @@ button, input, select, textarea {
   background-color: var(--bg-surface);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-base);
+  box-shadow: 0 2px 10px rgba(17, 17, 15, 0.05);
   height: 100%;
   min-height: 0;
+  overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
+  scrollbar-gutter: stable;
 }
 
 .reader-pane {
   background-color: var(--bg-surface);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-base);
+  box-shadow: 0 2px 10px rgba(17, 17, 15, 0.05);
   height: 100%;
   min-height: 0;
   overflow: hidden;
@@ -863,14 +1156,16 @@ button, input, select, textarea {
   list-style: none;
   margin: 0;
   padding: 0;
+  overflow-x: clip;
 }
 
 .stream-row {
   position: relative;
-  padding: 13px 16px 13px 18px;
-  border-bottom: 1px solid var(--border-subtle);
+  padding: 13px 16px 13px 20px;
+  border-bottom: 1px solid var(--row-border);
+  overflow-x: clip;
   cursor: pointer;
-  transition: background-color 280ms ease, transform 380ms cubic-bezier(0.16, 1, 0.3, 1);
+  transition: background-color 280ms ease;
 }
 
 .stream-list.is-cat-switching .stream-row {
@@ -881,18 +1176,19 @@ button, input, select, textarea {
 .stream-row::before {
   content: "";
   position: absolute;
-  left: 0;
-  top: 6px;
-  bottom: 6px;
+  left: 6px;
+  top: 12px;
+  bottom: 12px;
   width: 3px;
+  border-radius: 999px;
   background-color: var(--text-accent);
-  transform: scaleY(0);
-  transition: transform 420ms cubic-bezier(0.16, 1, 0.3, 1);
+  opacity: 0;
+  transform: scaleY(0.4);
+  transition: transform 340ms cubic-bezier(0.16, 1, 0.3, 1), opacity 220ms ease;
 }
 
 .stream-row:hover {
-  background-color: var(--bg-page);
-  transform: translateX(2px);
+  background-color: var(--row-hover);
 }
 
 .stream-row:last-child {
@@ -900,11 +1196,11 @@ button, input, select, textarea {
 }
 
 .stream-row[aria-selected="true"] {
-  background-color: var(--bg-subtle);
-  transform: translateX(4px);
+  background-color: var(--row-selected);
 }
 
 .stream-row[aria-selected="true"]::before {
+  opacity: 1;
   transform: scaleY(1);
 }
 
@@ -966,7 +1262,7 @@ button, input, select, textarea {
 
 .row-sender-name {
   font-size: 0.9rem;
-  font-weight: 600;
+  font-weight: 700;
   color: var(--text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1022,7 +1318,7 @@ button, input, select, textarea {
 .stream-empty-title {
   margin-top: 10px;
   font-size: 1rem;
-  font-weight: 600;
+  font-weight: 700;
   color: var(--text-primary);
 }
 
@@ -1096,7 +1392,7 @@ button, input, select, textarea {
 }
 
 .reader-sender-strong {
-  font-weight: 600;
+  font-weight: 700;
   font-size: 0.9375rem;
   color: var(--text-primary);
   line-height: 1.25;
@@ -1164,7 +1460,7 @@ button, input, select, textarea {
   padding: 10px 16px;
   border-radius: var(--radius-base);
   font-size: 0.875rem;
-  font-weight: 500;
+  font-weight: 700;
   display: inline-flex;
   align-items: center;
   gap: 8px;
@@ -1183,14 +1479,28 @@ button, input, select, textarea {
   display: none !important;
 }
 
+@media (max-width: 1100px) {
+  .topbar {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+  }
+  .mailbox-controls {
+    justify-self: end;
+  }
+  .search-wrap {
+    order: 4;
+    grid-column: 1 / -1;
+  }
+  .category-pills {
+    flex: 1 1 0%;
+  }
+  .filter-bar {
+    flex-wrap: nowrap;
+  }
+}
+
 @media (max-width: 880px) {
   .shell {
     padding: 12px 14px 20px;
-  }
-  .search-wrap {
-    order: 3;
-    flex: 1 1 100%;
-    max-width: none;
   }
   .inbox-grid {
     grid-template-columns: 280px minmax(0, 1fr);
@@ -1223,6 +1533,85 @@ button, input, select, textarea {
   }
 }
 
+@media (max-width: 640px) {
+  .topbar {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 10px;
+  }
+  .language-controls {
+    grid-column: 2;
+    grid-row: 1;
+  }
+  .search-wrap {
+    order: 0;
+    grid-row: 2;
+  }
+  .mailbox-controls {
+    grid-column: 1 / -1;
+    grid-row: 3;
+    justify-self: stretch;
+  }
+  .acct-switcher {
+    flex: 1;
+    min-width: 0;
+  }
+  .topbar .acct-trigger {
+    width: 100%;
+    max-width: none;
+    justify-content: flex-start;
+  }
+  .acct-chevron {
+    margin-left: auto;
+  }
+  .acct-menu {
+    left: 0;
+    right: auto;
+  }
+  .topbar .btn-primary {
+    margin-left: auto;
+  }
+  .filter-bar {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .category-pills {
+    flex-basis: 100%;
+  }
+  .filter-bar-right {
+    width: 100%;
+    justify-content: space-between;
+  }
+  .filter-bar-right .sort-btn {
+    min-height: 40px;
+    margin-left: auto;
+  }
+}
+
+@supports not (backdrop-filter: blur(1px)) {
+  .glass-pill {
+    background: var(--bg-surface);
+    border-color: var(--border-subtle);
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .glass-pill {
+    background: var(--bg-surface);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}
+
+@media (prefers-contrast: more) {
+  .glass-pill {
+    background: var(--bg-surface);
+    border-color: var(--text-secondary);
+  }
+  .cat-count {
+    color: var(--text-secondary);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     transition-duration: 0.01ms !important;
@@ -1236,12 +1625,16 @@ pub const INDEX_HTML: &str = r##"<!doctype html>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Vortex Inbox</title>
+  <title>Vortex</title>
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100' fill='%23ffffff'%3E%3Cpath d='M74.6 8.6L69.4 6.9L62.9 6.0L57.2 6.3L49.8 8.0L44.5 10.2L41.0 12.1L34.8 16.8L30.5 21.4L27.7 25.4L24.7 31.8L23.2 37.2L22.6 44.0L23.2 49.1L25.0 55.0L27.0 59.0L30.6 64.0L25.8 60.8L23.3 58.4L19.9 54.3L16.8 49.0L14.3 42.2L13.4 37.1L13.4 29.4L13.8 27.5L15.3 22.2L16.7 19.3L19.1 15.7L24.2 10.2L30.1 6.1L35.8 3.2L39.5 2.0L44.6 0.9L52.0 0.6L55.4 0.9L62.0 2.3L68.3 4.6L72.2 6.7ZM91.4 74.3L93.4 67.7L94.0 63.7L94.0 58.3L93.7 56.0L91.7 48.9L88.8 43.0L86.1 39.1L81.1 33.8L76.8 30.4L73.4 28.3L68.9 26.0L63.9 24.1L60.5 23.2L56.6 22.6L50.0 22.6L43.0 24.1L38.0 26.3L33.9 29.1L30.3 32.6L31.2 30.4L33.7 26.8L39.0 21.3L44.6 17.4L48.4 15.5L53.5 13.8L59.4 12.6L66.6 12.6L68.8 12.9L75.6 15.0L82.2 18.7L85.1 20.9L89.6 25.5L93.3 30.7L96.8 38.1L98.5 45.8L98.8 53.7L97.7 60.8L95.2 67.8ZM12.0 21.7L12.2 22.2L10.1 26.7L9.5 28.9L8.6 32.6L8.3 35.7L8.6 41.7L10.1 47.6L12.1 52.5L15.9 58.6L20.9 64.2L25.5 67.9L28.1 69.6L32.5 71.8L38.0 73.7L44.9 74.6L51.1 74.2L57.3 72.8L62.8 70.2L65.9 67.9L70.1 63.8L71.4 61.7L71.6 62.2L70.8 64.2L68.2 69.0L66.2 71.6L62.5 75.4L57.4 78.9L53.6 80.8L48.5 82.8L43.4 84.0L38.6 84.6L31.2 84.2L25.8 83.1L22.1 81.9L15.8 78.5L13.2 76.5L9.7 72.9L6.4 68.5L4.9 65.7L2.3 58.8L1.2 51.1L1.5 44.6L3.2 37.0L6.7 29.2ZM15.1 82.9L21.0 86.4L24.7 87.9L29.8 89.4L35.4 90.3L44.3 90.0L53.0 87.9L59.0 85.3L63.8 82.3L69.4 77.4L73.3 71.9L75.3 67.9L76.8 63.6L77.4 60.5L77.7 53.2L76.8 47.5L74.3 41.1L72.5 38.1L69.2 33.9L65.1 30.6L67.0 31.0L71.6 33.5L76.6 37.4L79.2 39.9L83.3 45.2L85.1 48.3L87.6 53.5L89.0 58.1L90.0 64.6L90.0 67.1L89.0 72.5L87.9 75.9L85.9 79.9L83.8 83.2L81.1 86.5L75.6 91.3L71.6 93.9L67.6 95.9L63.0 97.6L58.2 98.8L49.4 99.7L42.9 99.1L40.3 98.5L34.3 96.8L30.5 95.2L26.4 93.0L21.4 89.5L16.9 85.4ZM30.9 50.3a18.7 18.7 0 1 0 37.4 0a18.7 18.7 0 1 0 -37.4 0Z'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="/tokens.css">
 </head>
 <body>
   <!-- Official Heroicons v2 20/solid SVG sprite (fill="currentColor") -->
   <svg class="svg-sprite" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+    <symbol id="vortex-logo" viewBox="0 0 100 100" fill="currentColor">
+      <path d="M74.6 8.6L69.4 6.9L62.9 6.0L57.2 6.3L49.8 8.0L44.5 10.2L41.0 12.1L34.8 16.8L30.5 21.4L27.7 25.4L24.7 31.8L23.2 37.2L22.6 44.0L23.2 49.1L25.0 55.0L27.0 59.0L30.6 64.0L25.8 60.8L23.3 58.4L19.9 54.3L16.8 49.0L14.3 42.2L13.4 37.1L13.4 29.4L13.8 27.5L15.3 22.2L16.7 19.3L19.1 15.7L24.2 10.2L30.1 6.1L35.8 3.2L39.5 2.0L44.6 0.9L52.0 0.6L55.4 0.9L62.0 2.3L68.3 4.6L72.2 6.7ZM91.4 74.3L93.4 67.7L94.0 63.7L94.0 58.3L93.7 56.0L91.7 48.9L88.8 43.0L86.1 39.1L81.1 33.8L76.8 30.4L73.4 28.3L68.9 26.0L63.9 24.1L60.5 23.2L56.6 22.6L50.0 22.6L43.0 24.1L38.0 26.3L33.9 29.1L30.3 32.6L31.2 30.4L33.7 26.8L39.0 21.3L44.6 17.4L48.4 15.5L53.5 13.8L59.4 12.6L66.6 12.6L68.8 12.9L75.6 15.0L82.2 18.7L85.1 20.9L89.6 25.5L93.3 30.7L96.8 38.1L98.5 45.8L98.8 53.7L97.7 60.8L95.2 67.8ZM12.0 21.7L12.2 22.2L10.1 26.7L9.5 28.9L8.6 32.6L8.3 35.7L8.6 41.7L10.1 47.6L12.1 52.5L15.9 58.6L20.9 64.2L25.5 67.9L28.1 69.6L32.5 71.8L38.0 73.7L44.9 74.6L51.1 74.2L57.3 72.8L62.8 70.2L65.9 67.9L70.1 63.8L71.4 61.7L71.6 62.2L70.8 64.2L68.2 69.0L66.2 71.6L62.5 75.4L57.4 78.9L53.6 80.8L48.5 82.8L43.4 84.0L38.6 84.6L31.2 84.2L25.8 83.1L22.1 81.9L15.8 78.5L13.2 76.5L9.7 72.9L6.4 68.5L4.9 65.7L2.3 58.8L1.2 51.1L1.5 44.6L3.2 37.0L6.7 29.2ZM15.1 82.9L21.0 86.4L24.7 87.9L29.8 89.4L35.4 90.3L44.3 90.0L53.0 87.9L59.0 85.3L63.8 82.3L69.4 77.4L73.3 71.9L75.3 67.9L76.8 63.6L77.4 60.5L77.7 53.2L76.8 47.5L74.3 41.1L72.5 38.1L69.2 33.9L65.1 30.6L67.0 31.0L71.6 33.5L76.6 37.4L79.2 39.9L83.3 45.2L85.1 48.3L87.6 53.5L89.0 58.1L90.0 64.6L90.0 67.1L89.0 72.5L87.9 75.9L85.9 79.9L83.8 83.2L81.1 86.5L75.6 91.3L71.6 93.9L67.6 95.9L63.0 97.6L58.2 98.8L49.4 99.7L42.9 99.1L40.3 98.5L34.3 96.8L30.5 95.2L26.4 93.0L21.4 89.5L16.9 85.4ZM30.9 50.3a18.7 18.7 0 1 0 37.4 0a18.7 18.7 0 1 0 -37.4 0Z"/>
+    </symbol>
     <symbol id="hi-inbox" viewBox="0 0 20 20" fill="currentColor">
       <path fill-rule="evenodd" d="M1 11.27c0-.246.033-.492.099-.73l1.523-5.521A2.75 2.75 0 0 1 5.273 3h9.454a2.75 2.75 0 0 1 2.651 2.019l1.523 5.52c.066.239.099.485.099.732V15a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2v-3.73Zm3.068-5.852A1.25 1.25 0 0 1 5.273 4.5h9.454a1.25 1.25 0 0 1 1.205.918l1.523 5.52c.006.02.01.041.015.062H14a1 1 0 0 0-.86.49l-.606 1.02a1 1 0 0 1-.86.49H8.236a1 1 0 0 1-.894-.553l-.448-.894A1 1 0 0 0 6 11H2.53l.015-.062 1.523-5.52Z" clip-rule="evenodd"/>
     </symbol>
@@ -1313,29 +1706,42 @@ pub const INDEX_HTML: &str = r##"<!doctype html>
     <symbol id="hi-arrows-up-down" viewBox="0 0 20 20" fill="currentColor">
       <path fill-rule="evenodd" d="M2.24 6.8a.75.75 0 0 0 1.06-.04l1.95-2.1v8.59a.75.75 0 0 0 1.5 0V4.66l1.95 2.1a.75.75 0 1 0 1.1-1.02l-3.25-3.5a.75.75 0 0 0-1.1 0L2.2 5.74a.75.75 0 0 0 .04 1.06Zm8 6.4a.75.75 0 0 0-.04 1.06l3.25 3.5a.75.75 0 0 0 1.1 0l3.25-3.5a.75.75 0 1 0-1.1-1.02l-1.95 2.1V6.75a.75.75 0 0 0-1.5 0v8.59l-1.95-2.1a.75.75 0 0 0-1.06-.04Z" clip-rule="evenodd"/>
     </symbol>
+    <symbol id="hi-sun" viewBox="0 0 20 20" fill="currentColor">
+      <path d="M10 2a.75.75 0 0 1 .75.75v1.5a.75.75 0 0 1-1.5 0v-1.5A.75.75 0 0 1 10 2ZM10 15a.75.75 0 0 1 .75.75v1.5a.75.75 0 0 1-1.5 0v-1.5A.75.75 0 0 1 10 15ZM10 7a3 3 0 1 0 0 6 3 3 0 0 0 0-6ZM15.657 5.404a.75.75 0 1 0-1.06-1.06l-1.061 1.06a.75.75 0 0 0 1.06 1.06l1.06-1.06ZM6.464 14.596a.75.75 0 1 0-1.06-1.06l-1.06 1.06a.75.75 0 0 0 1.06 1.06l1.06-1.06ZM18 10a.75.75 0 0 1-.75.75h-1.5a.75.75 0 0 1 0-1.5h1.5A.75.75 0 0 1 18 10ZM5 10a.75.75 0 0 1-.75.75h-1.5a.75.75 0 0 1 0-1.5h1.5A.75.75 0 0 1 5 10ZM14.596 15.657a.75.75 0 0 0 1.06-1.06l-1.06-1.061a.75.75 0 1 0-1.06 1.06l1.06 1.06ZM5.404 6.464a.75.75 0 0 0 1.06-1.06l-1.06-1.06a.75.75 0 1 0-1.061 1.06l1.06 1.06Z"/>
+    </symbol>
+    <symbol id="hi-moon" viewBox="0 0 20 20" fill="currentColor">
+      <path fill-rule="evenodd" d="M7.455 2.004a.75.75 0 0 1 .26.77 7 7 0 0 0 9.958 7.967.75.75 0 0 1 1.067.853A8.5 8.5 0 1 1 6.647 1.921a.75.75 0 0 1 .808.083Z" clip-rule="evenodd"/>
+    </symbol>
+    <symbol id="hi-speaker-wave" viewBox="0 0 20 20" fill="currentColor">
+      <path d="M10.5 3.75a.75.75 0 0 0-1.264-.546L5.203 7H2.667a.75.75 0 0 0-.7.48A6.985 6.985 0 0 0 1.5 10c0 .887.165 1.737.468 2.52.111.29.39.48.7.48h2.535l4.033 3.796a.75.75 0 0 0 1.264-.546V3.75ZM16.45 5.05a.75.75 0 0 0-1.06 1.061 5.5 5.5 0 0 1 0 7.778.75.75 0 0 0 1.06 1.06 7 7 0 0 0 0-9.899Z"/>
+      <path d="M14.329 7.172a.75.75 0 0 0-1.061 1.06 2.5 2.5 0 0 1 0 3.536.75.75 0 0 0 1.06 1.06 4 4 0 0 0 0-5.656Z"/>
+    </symbol>
+    <symbol id="hi-speaker-x-mark" viewBox="0 0 20 20" fill="currentColor">
+      <path d="M10.5 3.75a.75.75 0 0 0-1.264-.546L5.203 7H2.667a.75.75 0 0 0-.7.48A6.985 6.985 0 0 0 1.5 10c0 .887.165 1.737.468 2.52.111.29.39.48.7.48h2.535l4.033 3.796a.75.75 0 0 0 1.264-.546V3.75ZM13.78 7.22a.75.75 0 1 0-1.06 1.06L14.44 10l-1.72 1.72a.75.75 0 1 0 1.06 1.06l1.72-1.72 1.72 1.72a.75.75 0 1 0 1.06-1.06L16.56 10l1.72-1.72a.75.75 0 0 0-1.06-1.06L15.5 8.94l-1.72-1.72Z"/>
+    </symbol>
   </svg>
 
   <div class="shell">
     <header class="topbar">
       <span class="brand-mark">
-        <svg class="hi-icon-lg" aria-hidden="true"><use href="#hi-inbox"></use></svg>
-        <h1 class="brand-title">Vortex Inbox</h1>
+        <svg class="hi-icon-lg" aria-hidden="true"><use href="#vortex-logo"></use></svg>
+        <h1 class="brand-title">Vortex</h1>
       </span>
 
-      <div id="topSearchWrap" class="search-wrap">
+      <div id="topSearchWrap" class="search-wrap glass-pill" role="search">
         <svg class="hi-icon" aria-hidden="true"><use href="#hi-magnifying-glass"></use></svg>
-        <input id="searchInput" type="search" class="input-field" placeholder="Tìm kiếm thư, người gửi hoặc mã xác nhận...">
+        <input id="searchInput" type="search" class="input-field" aria-label="Tìm kiếm thư, người gửi hoặc mã xác nhận" placeholder="Tìm kiếm thư, người gửi hoặc mã xác nhận...">
+        <button id="btnSync" type="button" class="btn refresh-btn" aria-label="Làm mới" title="Làm mới">
+          <svg class="hi-icon" aria-hidden="true"><use href="#hi-arrow-path"></use></svg>
+        </button>
       </div>
 
-      <div class="top-actions">
-        <button id="btnSync" type="button" class="btn">
-          <svg class="hi-icon" aria-hidden="true"><use href="#hi-arrow-path"></use></svg>
-          <span data-i18n="sync_now">Làm mới</span>
-        </button>
+      <div class="mailbox-controls glass-pill" role="group" aria-label="Quản lý hộp thư">
         <div id="acctSwitcher" class="acct-switcher hidden">
-          <button id="btnAcctMenu" type="button" class="btn acct-trigger" aria-expanded="false">
+          <button id="btnAcctMenu" type="button" class="btn acct-trigger" aria-expanded="false" aria-controls="acctMenu" aria-haspopup="true">
             <svg class="hi-icon" aria-hidden="true"><use href="#hi-user-circle"></use></svg>
             <span id="acctActiveLabel" class="acct-active-label">Tất cả hộp thư</span>
+            <svg class="acct-chevron" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M5.22 7.22a.75.75 0 0 1 1.06 0L10 10.94l3.72-3.72a.75.75 0 0 1 1.06 1.06l-4.25 4.25a.75.75 0 0 1-1.06 0L5.22 8.28a.75.75 0 0 1 0-1.06Z" clip-rule="evenodd"/></svg>
           </button>
           <div id="acctMenu" class="acct-menu hidden" role="menu"></div>
         </div>
@@ -1343,26 +1749,21 @@ pub const INDEX_HTML: &str = r##"<!doctype html>
           <svg class="hi-icon" aria-hidden="true"><use href="#hi-user-plus"></use></svg>
           <span id="btnToggleSetupLabel" data-i18n="connect_account">Thêm hộp thư</span>
         </button>
-        <button id="btnLang" type="button" class="btn btn-ghost">
+      </div>
+      <div class="language-controls glass-pill">
+        <button id="btnSfx" type="button" class="btn btn-ghost" aria-label="Âm thanh: Bật" title="Âm thanh: Bật">
+          <svg class="hi-icon" aria-hidden="true"><use id="sfxIconUse" href="#hi-speaker-wave"></use></svg>
+        </button>
+        <button id="btnTheme" type="button" class="btn btn-ghost" aria-label="Đổi giao diện Sáng/Tối">
+          <svg class="hi-icon" aria-hidden="true"><use id="themeIconUse" href="#hi-moon"></use></svg>
+          <span id="themeLabel">Tối</span>
+        </button>
+        <button id="btnLang" type="button" class="btn btn-ghost" aria-label="Switch to English">
           <svg class="hi-icon" aria-hidden="true"><use href="#hi-language"></use></svg>
           <span id="langLabel">EN</span>
         </button>
       </div>
     </header>
-
-    <!-- Instant Multi-Account OTP Banner (displays active codes across all accounts simultaneously) -->
-    <section id="otpBanner" class="otp-banner hidden" aria-live="polite">
-      <div id="otpBannerHead" class="otp-banner-head hidden">
-        <span id="otpBannerSummary"></span>
-        <div class="account-row-actions">
-          <button id="btnCopyAllOtp" type="button" class="btn btn-sm btn-primary">
-            <svg class="hi-icon" aria-hidden="true"><use href="#hi-clipboard-document"></use></svg>
-            <span data-i18n="copy_all_codes">Sao chép tất cả</span>
-          </button>
-        </div>
-      </div>
-      <div id="otpList" class="otp-list"></div>
-    </section>
 
     <!-- SCREEN 1: Account Management & Multi-Account Onboarding View -->
     <section id="onboardingView" class="onboarding-wrap hidden" aria-label="Thêm hộp thư">
@@ -1408,14 +1809,6 @@ pub const INDEX_HTML: &str = r##"<!doctype html>
           <button type="button" class="preset-btn" data-preset="icloud" aria-pressed="false">
             <svg class="hi-icon" aria-hidden="true"><use href="#hi-shield-check"></use></svg>
             <span>iCloud</span>
-          </button>
-          <button type="button" class="preset-btn" data-preset="telegram" aria-pressed="false">
-            <svg class="hi-icon" aria-hidden="true"><use href="#hi-user-group"></use></svg>
-            <span>Telegram</span>
-          </button>
-          <button type="button" class="preset-btn" data-preset="rss" aria-pressed="false">
-            <svg class="hi-icon" aria-hidden="true"><use href="#hi-tag"></use></svg>
-            <span>RSS</span>
           </button>
           <button type="button" class="preset-btn" data-preset="custom_imap" aria-pressed="false">
             <svg class="hi-icon" aria-hidden="true"><use href="#hi-key"></use></svg>
@@ -1478,7 +1871,7 @@ pub const INDEX_HTML: &str = r##"<!doctype html>
     <!-- SCREEN 2: Clean 2-Column Inbox View -->
     <main id="inboxView" aria-label="Hộp thư">
       <div class="filter-bar">
-        <nav id="categoryNav" class="category-pills" aria-label="Bộ lọc thư">
+        <nav id="categoryNav" class="category-pills glass-pill" aria-label="Bộ lọc thư">
           <span id="catGlider" class="cat-glider" aria-hidden="true"></span>
           <button type="button" class="cat-btn" data-cat="" aria-pressed="true">
             <svg class="hi-icon" aria-hidden="true"><use href="#hi-inbox"></use></svg>
@@ -1517,8 +1910,8 @@ pub const INDEX_HTML: &str = r##"<!doctype html>
           </button>
         </nav>
         <div class="filter-bar-right">
-          <span id="statusNotice" class="otp-meta"></span>
-          <button id="btnAutoSort" type="button" class="btn btn-sm sort-btn" aria-pressed="false">
+          <span id="statusNotice" class="otp-meta" role="status"></span>
+          <button id="btnAutoSort" type="button" class="btn btn-sm sort-btn glass-pill" aria-pressed="false">
             <svg class="hi-icon" aria-hidden="true"><use href="#hi-arrows-up-down"></use></svg>
             <span id="btnAutoSortLabel" data-i18n="auto_sort">Tự động sắp xếp</span>
           </button>
@@ -1629,6 +2022,11 @@ pub const APP_JS: &str = r##"(() => {
       cat_work: "Công việc",
       cat_promo: "Khuyến mãi",
       auto_sort: "Tự động sắp xếp",
+      theme_dark: "Tối",
+      theme_light: "Sáng",
+      theme_toggle_tip: "Đổi giao diện Sáng / Tối",
+      sfx_on_tip: "Âm thanh Creamy: Đang bật (Bấm để tắt)",
+      sfx_off_tip: "Âm thanh Creamy: Đang tắt (Bấm để bật)",
       select_item_prompt: "Chọn một thư ở bên trái để đọc nội dung",
       act_read: "Đã đọc",
       act_archive: "Lưu trữ",
@@ -1641,8 +2039,6 @@ pub const APP_JS: &str = r##"(() => {
       guide_gmail: "Mẹo: Với Gmail, dùng Mật khẩu ứng dụng 16 ký tự trong phần Bảo mật của tài khoản Google.",
       guide_outlook: "Mẹo: Nhập địa chỉ Outlook/Hotmail và mật khẩu ứng dụng Microsoft của bạn.",
       guide_icloud: "Mẹo: Tạo mật khẩu ứng dụng tại trang quản lý Apple ID (appleid.apple.com).",
-      guide_telegram: "Mẹo: Nhập tên Bot và mã Bot Token lấy từ @BotFather trên Telegram.",
-      guide_rss: "Mẹo: Đặt tên nguồn tin và dán đường dẫn RSS vào ô Máy chủ bên dưới.",
       guide_custom_imap: "Mẹo: Điền địa chỉ email, mật khẩu và thông tin máy chủ IMAP của bạn."
     },
     en: {
@@ -1684,6 +2080,11 @@ pub const APP_JS: &str = r##"(() => {
       cat_work: "Work",
       cat_promo: "Promotions",
       auto_sort: "Auto-sort",
+      theme_dark: "Dark",
+      theme_light: "Light",
+      theme_toggle_tip: "Switch Light / Dark theme",
+      sfx_on_tip: "Creamy SFX: On (Click to mute)",
+      sfx_off_tip: "Creamy SFX: Off (Click to unmute)",
       select_item_prompt: "Select a message on the left to read",
       act_read: "Mark read",
       act_archive: "Archive",
@@ -1696,8 +2097,6 @@ pub const APP_JS: &str = r##"(() => {
       guide_gmail: "Tip: For Gmail, use a 16-character App Password from your Google Account Security settings.",
       guide_outlook: "Tip: Enter your Outlook email and Microsoft App Password.",
       guide_icloud: "Tip: Generate an app-specific password at appleid.apple.com.",
-      guide_telegram: "Tip: Enter your Bot name and the Bot Token from @BotFather.",
-      guide_rss: "Tip: Enter a name for the feed and paste the feed URL into the Server field below.",
       guide_custom_imap: "Tip: Enter your email, password, and IMAP server details below."
     }
   };
@@ -1726,9 +2125,176 @@ pub const APP_JS: &str = r##"(() => {
   };
 
   let lang = "vi";
+  let theme = "light";
+  let sfxEnabled = true;
+  try {
+    const savedTheme = localStorage.getItem("vortex_theme");
+    if (savedTheme === "dark" || savedTheme === "light") {
+      theme = savedTheme;
+    } else if (window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches) {
+      theme = "dark";
+    }
+    const savedSfx = localStorage.getItem("vortex_sfx");
+    if (savedSfx === "0") {
+      sfxEnabled = false;
+    }
+  } catch (_) {}
+
+  let audioCtx = null;
+  let cushionBuffer = null;
+  let lastSfxAt = 0;
+
+  function ensureAudioCtx() {
+    if (!audioCtx) {
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      if (!Ctx) return null;
+      audioCtx = new Ctx();
+    }
+    if (audioCtx.state === "suspended") {
+      audioCtx.resume().catch(() => {});
+    }
+    if (!cushionBuffer && audioCtx) {
+      const sr = audioCtx.sampleRate;
+      const len = Math.floor(sr * 0.028);
+      cushionBuffer = audioCtx.createBuffer(1, len, sr);
+      const data = cushionBuffer.getChannelData(0);
+      let b0 = 0;
+      let b1 = 0;
+      let b2 = 0;
+      for (let i = 0; i < len; i++) {
+        const white = Math.random() * 2 - 1;
+        b0 = 0.997 * b0 + white * 0.029;
+        b1 = 0.985 * b1 + white * 0.032;
+        b2 = 0.950 * b2 + white * 0.048;
+        const env = Math.sin((Math.PI * i) / len);
+        data[i] = (b0 + b1 + b2 + white * 0.018) * env * 0.9;
+      }
+    }
+    return audioCtx;
+  }
+
+  function triggerCreamyVoice(ctx, t0, fStart, fEnd, durSec, cutoffHz, qVal, peakGain, cushionLevel) {
+    const bodyOsc = ctx.createOscillator();
+    const subOsc = ctx.createOscillator();
+    const filter = ctx.createBiquadFilter();
+    const vca = ctx.createGain();
+
+    bodyOsc.type = "triangle";
+    subOsc.type = "sine";
+
+    bodyOsc.frequency.setValueAtTime(fStart, t0);
+    bodyOsc.frequency.exponentialRampToValueAtTime(Math.max(40, fEnd), t0 + durSec);
+
+    subOsc.frequency.setValueAtTime(fStart * 0.5, t0);
+    subOsc.frequency.exponentialRampToValueAtTime(Math.max(30, fEnd * 0.5), t0 + durSec);
+
+    filter.type = "lowpass";
+    filter.frequency.setValueAtTime(cutoffHz, t0);
+    filter.frequency.exponentialRampToValueAtTime(Math.max(180, cutoffHz * 0.42), t0 + durSec);
+    filter.Q.setValueAtTime(qVal, t0);
+
+    vca.gain.setValueAtTime(0.0001, t0);
+    vca.gain.linearRampToValueAtTime(peakGain, t0 + 0.0032);
+    vca.gain.exponentialRampToValueAtTime(0.0001, t0 + durSec + 0.008);
+
+    const subGain = ctx.createGain();
+    subGain.gain.setValueAtTime(0.55, t0);
+
+    bodyOsc.connect(filter);
+    subOsc.connect(subGain);
+    subGain.connect(filter);
+    filter.connect(vca);
+    vca.connect(ctx.destination);
+
+    bodyOsc.start(t0);
+    subOsc.start(t0);
+    bodyOsc.stop(t0 + durSec + 0.012);
+    subOsc.stop(t0 + durSec + 0.012);
+
+    if (cushionBuffer && cushionLevel > 0) {
+      const noise = ctx.createBufferSource();
+      noise.buffer = cushionBuffer;
+      const bp = ctx.createBiquadFilter();
+      bp.type = "bandpass";
+      bp.frequency.setValueAtTime(Math.min(900, cutoffHz * 0.68), t0);
+      bp.Q.setValueAtTime(1.85, t0);
+      const nGain = ctx.createGain();
+      nGain.gain.setValueAtTime(0.0001, t0);
+      nGain.gain.linearRampToValueAtTime(peakGain * cushionLevel, t0 + 0.002);
+      nGain.gain.exponentialRampToValueAtTime(0.0001, t0 + Math.min(0.018, durSec));
+      noise.connect(bp);
+      bp.connect(nGain);
+      nGain.connect(ctx.destination);
+      noise.start(t0);
+      noise.stop(t0 + 0.022);
+    }
+  }
+
+  function playCreamySfx(kind = "click") {
+    if (!sfxEnabled) return;
+    const nowMs = performance.now();
+    const minGap = kind === "pill" ? 55 : 28;
+    if (nowMs - lastSfxAt < minGap) return;
+    lastSfxAt = nowMs;
+
+    const ctx = ensureAudioCtx();
+    if (!ctx) return;
+    const t0 = ctx.currentTime + 0.001;
+    const jitter = 0.975 + Math.random() * 0.05;
+
+    if (kind === "pill") {
+      // Creamy lubed switch downstroke + marbly upstroke pop
+      triggerCreamyVoice(ctx, t0, 295 * jitter, 138 * jitter, 0.026, 760, 2.5, 0.19, 0.55);
+      triggerCreamyVoice(ctx, t0 + 0.019, 415 * jitter, 205 * jitter, 0.028, 940, 2.7, 0.15, 0.35);
+    } else if (kind === "select") {
+      // Soft marbly tap when picking a mail row
+      triggerCreamyVoice(ctx, t0, 335 * jitter, 168 * jitter, 0.025, 820, 2.3, 0.15, 0.45);
+    } else if (kind === "copy") {
+      // Two warm PBT tiles clicking in an ascending fifth
+      triggerCreamyVoice(ctx, t0, 320 * jitter, 215 * jitter, 0.028, 960, 2.6, 0.18, 0.45);
+      triggerCreamyVoice(ctx, t0 + 0.048, 480 * jitter, 315 * jitter, 0.034, 1120, 2.8, 0.17, 0.35);
+    } else if (kind === "delete") {
+      // Deep muted cushion thud
+      triggerCreamyVoice(ctx, t0, 225 * jitter, 92 * jitter, 0.038, 560, 2.1, 0.21, 0.6);
+    } else {
+      // Standard 3D pill / button press: deep POM housing thock + subtle release
+      triggerCreamyVoice(ctx, t0, 272 * jitter, 128 * jitter, 0.027, 740, 2.45, 0.18, 0.55);
+      triggerCreamyVoice(ctx, t0 + 0.016, 360 * jitter, 182 * jitter, 0.021, 860, 2.3, 0.09, 0.25);
+    }
+  }
   let items = [];
   let cachedAllItems = [];
   let recentCodes = [];
+  let hiddenItemKeys = new Set();
+  try {
+    const rawHidden = JSON.parse(localStorage.getItem("vortex_hidden_items") || "[]");
+    if (Array.isArray(rawHidden)) {
+      rawHidden.forEach((k) => hiddenItemKeys.add(String(k)));
+    }
+  } catch (_) {}
+
+  function itemHideKeys(it) {
+    if (!it) return [];
+    const keys = [`id:${it.id}`];
+    if (it.account || it.external_id) {
+      keys.push(`ext:${it.account || ""}:${it.external_id || ""}`);
+    }
+    return keys;
+  }
+
+  function markItemHidden(it) {
+    itemHideKeys(it).forEach((k) => hiddenItemKeys.add(k));
+    try {
+      const arr = Array.from(hiddenItemKeys).slice(-500);
+      localStorage.setItem("vortex_hidden_items", JSON.stringify(arr));
+    } catch (_) {}
+  }
+
+  function isItemVisible(it) {
+    if (!it) return false;
+    if (it.state === "trash" || it.state === "archived" || it.state === "spam") return false;
+    return !itemHideKeys(it).some((k) => hiddenItemKeys.has(k));
+  }
   let accounts = [];
   let selectedId = null;
   let activeCategory = "";
@@ -1856,15 +2422,6 @@ pub const APP_JS: &str = r##"(() => {
       $("accHost").value = "imap.mail.me.com";
       $("accPort").value = "993";
       $("accEmail").placeholder = "tenban@icloud.com";
-    } else if (preset === "telegram") {
-      $("accHost").value = "api.telegram.org";
-      $("accPort").value = "443";
-      $("accEmail").placeholder = "@ten_bot";
-    } else if (preset === "rss") {
-      $("accHost").value = "https://";
-      $("accPort").value = "443";
-      $("accEmail").placeholder = "Tin tức";
-      showServer = true;
     } else {
       showServer = true;
     }
@@ -1934,7 +2491,7 @@ pub const APP_JS: &str = r##"(() => {
     if (catMorphTimer) clearTimeout(catMorphTimer);
     catMorphTimer = setTimeout(() => {
       ul.classList.remove("is-cat-switching");
-    }, 520);
+    }, 820);
   }
 
   function sortItemsList(list) {
@@ -1972,9 +2529,51 @@ pub const APP_JS: &str = r##"(() => {
     return copy;
   }
 
+  function applySfxButton() {
+    const iconUse = $("sfxIconUse");
+    if (iconUse) {
+      iconUse.setAttribute("href", sfxEnabled ? "#hi-speaker-wave" : "#hi-speaker-x-mark");
+    }
+    const btn = $("btnSfx");
+    if (btn) {
+      const tip = sfxEnabled ? t("sfx_on_tip") : t("sfx_off_tip");
+      btn.setAttribute("aria-label", tip);
+      btn.title = tip;
+      btn.style.opacity = sfxEnabled ? "1" : "0.55";
+    }
+  }
+
+  function applyTheme(rerenderIframe = false) {
+    document.documentElement.setAttribute("data-theme", theme);
+    const iconUse = $("themeIconUse");
+    if (iconUse) {
+      iconUse.setAttribute("href", theme === "dark" ? "#hi-sun" : "#hi-moon");
+    }
+    const lbl = $("themeLabel");
+    if (lbl) {
+      lbl.textContent = theme === "dark" ? t("theme_light") : t("theme_dark");
+    }
+    const btn = $("btnTheme");
+    if (btn) {
+      btn.setAttribute("aria-label", t("theme_toggle_tip"));
+      btn.title = t("theme_toggle_tip");
+    }
+    applySfxButton();
+    if (rerenderIframe && selectedId) {
+      lastRenderedItemId = null;
+      selectItem(selectedId, false);
+    }
+    requestAnimationFrame(updateCategoryGlider);
+  }
+
   function applyTranslations() {
     document.documentElement.lang = lang;
+    $("btnLang").setAttribute("aria-label", lang === "vi" ? "Switch to English" : "Chuyển sang tiếng Việt");
+    $("btnSync").setAttribute("aria-label", t("sync_now"));
+    $("btnSync").title = t("sync_now");
+    $("searchInput").setAttribute("aria-label", t("search_placeholder"));
     $("langLabel").textContent = lang === "vi" ? "EN" : "VI";
+    applyTheme(false);
     document.querySelectorAll("[data-i18n]").forEach((el) => {
       const k = el.getAttribute("data-i18n");
       if (I18N[lang][k]) el.textContent = I18N[lang][k];
@@ -1986,7 +2585,6 @@ pub const APP_JS: &str = r##"(() => {
     renderAccountSwitcher(cachedAllItems);
     renderStream(true);
     if (selectedId) selectItem(selectedId, false);
-    renderRecentCodes();
     requestAnimationFrame(updateCategoryGlider);
   }
 
@@ -2032,13 +2630,16 @@ pub const APP_JS: &str = r##"(() => {
       if (activeAccount) qs.push(`account=${encodeURIComponent(activeAccount)}`);
       const filterUrl = "/api/items" + (qs.length ? `?${qs.join("&")}` : "");
 
-      const [status, accs, allItems, filteredList, codes] = await Promise.all([
+      const [status, accs, rawAllItems, rawFilteredList, rawCodes] = await Promise.all([
         api("/api/status"),
         api("/api/accounts"),
         api("/api/items"),
         api(filterUrl),
         api("/api/codes")
       ]);
+      const allItems = rawAllItems.filter(isItemVisible);
+      const filteredList = rawFilteredList.filter(isItemVisible);
+      const codes = rawCodes.filter((c) => !hiddenItemKeys.has(`id:${c.item_id}`));
       accounts = accs;
       if (activeAccount && !accounts.some((a) => a.id === activeAccount)) {
         activeAccount = "";
@@ -2050,7 +2651,7 @@ pub const APP_JS: &str = r##"(() => {
       updateCategoryCounts(allItems);
       if (accounts.length === 0) {
         setScreenMode("setup");
-      } else if (status.missing_secret_accounts && status.missing_secret_accounts.length > 0 && allItems.length === 0) {
+      } else if (status.missing_secret_accounts && status.missing_secret_accounts.length > 0 && rawAllItems.length === 0) {
         const missingEmail = status.missing_secret_accounts[0];
         setScreenMode("setup");
         setAddMode("single");
@@ -2063,16 +2664,21 @@ pub const APP_JS: &str = r##"(() => {
         setScreenMode("inbox");
       }
       renderAccountSwitcher(allItems);
+      if (forceStreamAnim) triggerStreamMorph(1);
       renderStream(forceStreamAnim);
-      if (items.length > 0 && (forceStreamAnim || !selectedId || !items.some((x) => x.id === selectedId))) {
+      if (items.length === 0) {
+        selectedId = null;
+        lastRenderedItemId = null;
+        $("readerContentWrap").classList.add("hidden");
+        $("readerEmptyState").classList.remove("hidden");
+      } else if (forceStreamAnim || !selectedId || !items.some((x) => x.id === selectedId)) {
         if (window.innerWidth > 720) {
           selectItem(items[0].id, false);
         }
       } else if (selectedId) {
         selectItem(selectedId, false);
       }
-      renderRecentCodes();
-
+  
       if (!autoEnrichedOnce && allItems.length > 0 && allItems.some((i) => !i.body_html)) {
         autoEnrichedOnce = true;
         triggerSync(null, true);
@@ -2082,33 +2688,41 @@ pub const APP_JS: &str = r##"(() => {
     }
   }
 
+  let syncSuccessTimer = null;
+
   async function triggerSync(accountId = null, silent = false) {
     if (syncInFlight) return;
     syncInFlight = true;
-    if (!silent) {
-      $("btnSync").classList.add("is-spinning");
-      $("statusNotice").textContent = lang === "vi" ? "Đang đồng bộ song song..." : "Syncing accounts in parallel...";
+    const btn = $("btnSync");
+    const useEl = btn ? btn.querySelector("use") : null;
+    if (!silent && btn) {
+      if (syncSuccessTimer) {
+        clearTimeout(syncSuccessTimer);
+        syncSuccessTimer = null;
+      }
+      btn.classList.remove("is-synced");
+      if (useEl) useEl.setAttribute("href", "#hi-arrow-path");
+      btn.classList.add("is-spinning");
     }
     try {
       const payload = accountId ? { account_id: accountId } : {};
       const res = await api("/api/sync", { method: "POST", body: JSON.stringify(payload) });
       await loadAll();
-      if (!silent) {
-        if (res.error) {
-          $("statusNotice").textContent = lang === "vi" ? `Lỗi đồng bộ: ${res.error}` : `Sync error: ${res.error}`;
-        } else {
-          $("statusNotice").textContent = lang === "vi"
-            ? `Đã đồng bộ (${res.synced || 0} thư mới)`
-            : `Synced (${res.synced || 0} new)`;
-        }
+      if (!silent && btn && !res.error) {
+        btn.classList.remove("is-spinning");
+        if (useEl) useEl.setAttribute("href", "#hi-check-circle");
+        btn.classList.add("is-synced");
+        syncSuccessTimer = setTimeout(() => {
+          btn.classList.remove("is-synced");
+          if (useEl) useEl.setAttribute("href", "#hi-arrow-path");
+          syncSuccessTimer = null;
+        }, 1200);
       }
     } catch (err) {
-      if (!silent) {
-        $("statusNotice").textContent = String(err.message || err);
-      }
+      // silent
     } finally {
       syncInFlight = false;
-      $("btnSync").classList.remove("is-spinning");
+      if (btn) btn.classList.remove("is-spinning");
     }
   }
 
@@ -2151,7 +2765,6 @@ pub const APP_JS: &str = r##"(() => {
         if (activeAccount === "" && $("onboardingView").classList.contains("hidden")) return;
         activeAccount = "";
         setScreenMode("inbox");
-        triggerStreamMorph(1);
         loadAll(true);
       };
       allWrap.appendChild(allBtn);
@@ -2200,7 +2813,6 @@ pub const APP_JS: &str = r##"(() => {
         if (activeAccount === nextAcc && $("onboardingView").classList.contains("hidden")) return;
         activeAccount = nextAcc;
         setScreenMode("inbox");
-        triggerStreamMorph(1);
         loadAll(true);
       };
 
@@ -2382,8 +2994,16 @@ pub const APP_JS: &str = r##"(() => {
       snip.textContent = cleanedPreview.slice(0, 140);
 
       li.append(header, subj, snip);
-      li.onclick = () => selectItem(item.id, true);
-      li.onkeydown = (e) => { if (e.key === "Enter") selectItem(item.id, true); };
+      li.onclick = () => {
+        playCreamySfx("select");
+        selectItem(item.id, true);
+      };
+      li.onkeydown = (e) => {
+        if (e.key === "Enter") {
+          playCreamySfx("select");
+          selectItem(item.id, true);
+        }
+      };
       ul.appendChild(li);
     });
   }
@@ -2406,41 +3026,93 @@ pub const APP_JS: &str = r##"(() => {
         .replace(/\n/g, "<br>");
       bodyContent = `<div style="line-height:1.65;font-size:15px;">${escaped}</div>`;
     }
+    const isDark = theme === "dark";
+    const bgHex = isDark ? "#1b1b19" : "#f4f4f0";
+    const fgHex = isDark ? "#ecece6" : "#181816";
+    const linkHex = isDark ? "#dcdcd4" : "#22221f";
+    const sbThumb = isDark ? "#4e4e48" : "#9e9e95";
+    const sbHover = isDark ? "#7c7c74" : "#62625b";
+    const sbActive = isDark ? "#ecece6" : "#1a1a18";
     const bodyAnimRule = animate
       ? "body { animation: sheetImmersion 680ms cubic-bezier(0.16, 1, 0.3, 1) both; }"
       : "";
     return `<!doctype html><html><head><meta charset="utf-8"><base target="_blank"><style>
+      @font-face {
+        font-family: "Vortex SF Pro";
+        src: local("SF Pro Display Bold"), local("SFProDisplay-Bold");
+        font-style: normal;
+        font-weight: 700;
+        font-display: swap;
+      }
       @keyframes sheetImmersion {
         0% {
           opacity: 0;
-          transform: translate3d(0, 18px, 0) scale(0.99);
-          filter: blur(4px);
-        }
-        65% {
-          opacity: 1;
-          filter: blur(0);
+          transform: translate3d(0, 12px, 0);
         }
         100% {
           opacity: 1;
-          transform: translate3d(0, 0, 0) scale(1);
-          filter: blur(0);
+          transform: translate3d(0, 0, 0);
         }
+      }
+      *, *::before, *::after {
+        box-sizing: border-box;
+      }
+      *::-webkit-scrollbar {
+        width: 8px;
+        height: 0 !important;
+        background: transparent;
+      }
+      *::-webkit-scrollbar:horizontal {
+        display: none !important;
+        width: 0 !important;
+        height: 0 !important;
+      }
+      *::-webkit-scrollbar-button {
+        display: none !important;
+        width: 0 !important;
+        height: 0 !important;
+      }
+      *::-webkit-scrollbar-track {
+        background: transparent;
+        margin-block: 6px;
+      }
+      *::-webkit-scrollbar-corner {
+        background: transparent;
+        display: none;
+      }
+      *::-webkit-scrollbar-thumb {
+        background-color: ${sbThumb};
+        border-radius: 999px;
+        border: 2px solid transparent;
+        background-clip: padding-box;
+        min-height: 36px;
+      }
+      *::-webkit-scrollbar-thumb:hover {
+        background-color: ${sbHover};
+      }
+      *::-webkit-scrollbar-thumb:active {
+        background-color: ${sbActive};
       }
       html, body {
         margin: 0;
-        padding: 12px 4px 28px;
-        font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+        padding: 12px 6px 28px 4px;
+        max-width: 100%;
+        overflow-x: hidden !important;
+        font-family: "Vortex SF Pro", -apple-system, system-ui, "Segoe UI", Roboto, sans-serif;
+        font-weight: 700;
         font-size: 15px;
         line-height: 1.6;
-        color: #181816;
-        background-color: #ffffff;
-        overflow-wrap: break-word;
+        color: ${fgHex};
+        background-color: ${bgHex};
+        overflow-wrap: anywhere;
+        word-break: break-word;
       }
       ${bodyAnimRule}
-      img { max-width: 100%; height: auto; }
-      a { color: #165640; }
-      table { max-width: 100%; }
-      pre, code { font-family: ui-monospace, Consolas, monospace; white-space: pre-wrap; }
+      img { max-width: 100% !important; height: auto !important; }
+      a { color: ${linkHex}; text-decoration: underline; overflow-wrap: anywhere; }
+      table, tbody, tr, td, th, div, section, article, center { max-width: 100% !important; }
+      body * { font-family: "Vortex SF Pro", -apple-system, system-ui, "Segoe UI", Roboto, sans-serif !important; font-weight: 700 !important; }
+      pre, code { white-space: pre-wrap !important; overflow-x: hidden !important; word-break: break-word; }
     </style></head><body>${bodyContent}</body></html>`;
   }
 
@@ -2535,131 +3207,46 @@ pub const APP_JS: &str = r##"(() => {
     frame.srcdoc = buildEmailIframeDoc(item.body_html, bodyTextClean, canAnimateReader);
   }
 
-  function renderRecentCodes() {
-    const nowSec = Math.floor(Date.now() / 1000);
-    const active = recentCodes.filter((c) => c.expires_at > nowSec);
-    const banner = $("otpBanner");
-    const head = $("otpBannerHead");
-    const summary = $("otpBannerSummary");
-    const list = $("otpList");
-    if (!banner || !list) return;
-
-    if (active.length === 0) {
-      banner.classList.add("hidden");
-      list.innerHTML = "";
-      return;
-    }
-
-    const ordered = activeAccount
-      ? [
-          ...active.filter((c) => c.account === activeAccount),
-          ...active.filter((c) => c.account !== activeAccount)
-        ]
-      : active;
-    const visible = ordered.slice(0, 8);
-
-    banner.classList.remove("hidden");
-    if (head && summary) {
-      if (visible.length > 1) {
-        head.classList.remove("hidden");
-        summary.textContent = lang === "vi"
-          ? `Đang có ${visible.length} mã OTP hoạt động từ các tài khoản`
-          : `${visible.length} active OTP codes across accounts`;
-        $("btnCopyAllOtp").onclick = () => {
-          const text = visible
-            .map((c) => `${c.account || c.service}: ${c.code}`)
-            .join("\n");
-          copyCode(text, true);
-        };
-      } else {
-        head.classList.add("hidden");
-      }
-    }
-
-    list.innerHTML = "";
-    visible.forEach((c) => {
-      const rem = Math.max(0, c.expires_at - nowSec);
-      const row = document.createElement("div");
-      row.className = "otp-row";
-
-      const left = document.createElement("div");
-      left.className = "otp-banner-left";
-
-      const codeEl = document.createElement("div");
-      codeEl.className = "otp-code-value";
-      codeEl.textContent = c.code;
-
-      const metaWrap = document.createElement("div");
-      const accLine = document.createElement("p");
-      accLine.className = "otp-account-name";
-      accLine.textContent = c.account
-        ? `${c.account} · ${c.service} (${cleanSenderName(c.sender)})`
-        : `${c.service} (${cleanSenderName(c.sender)})`;
-
-      const timeLine = document.createElement("p");
-      timeLine.className = "otp-meta";
-      timeLine.textContent = lang === "vi"
-        ? `Còn hiệu lực ${Math.floor(rem / 60)} phút ${rem % 60} giây`
-        : `Expires in ${Math.floor(rem / 60)}m ${rem % 60}s`;
-
-      metaWrap.append(accLine, timeLine);
-      left.append(codeEl, metaWrap);
-
-      const right = document.createElement("div");
-      right.className = "account-row-actions";
-
-      const copyBtn = document.createElement("button");
-      copyBtn.type = "button";
-      copyBtn.className = "btn btn-sm btn-primary";
-      copyBtn.append(
-        svgIcon("hi-clipboard-document"),
-        document.createTextNode(t("copy_code"))
-      );
-      copyBtn.onclick = () => copyCode(c.code, false, c.account);
-      right.appendChild(copyBtn);
-
-      if (c.verification_link && !c.phishing_warning) {
-        const linkBtn = document.createElement("button");
-        linkBtn.type = "button";
-        linkBtn.className = "btn btn-sm";
-        linkBtn.textContent = t("open_verify_link");
-        linkBtn.onclick = () => window.open(c.verification_link, "_blank", "noopener,noreferrer");
-        right.appendChild(linkBtn);
-      }
-
-      row.append(left, right);
-      list.appendChild(row);
-    });
-  }
-
-  async function copyCode(code, isMulti = false, accountName = "") {
-    try {
-      await navigator.clipboard.writeText(code);
-      if (isMulti) {
-        showToast(lang === "vi" ? "Đã sao chép tất cả mã OTP" : "Copied all OTP codes");
-      } else {
-        const suffix = accountName ? ` (${accountName})` : "";
-        showToast((lang === "vi" ? `Đã sao chép mã ${code}` : `Copied code ${code}`) + suffix);
-      }
-      await api("/api/clipboard/copy", { method: "POST", body: JSON.stringify({ code }) });
-    } catch (_) {
-      showToast(code);
-    }
-  }
-
   async function runAction(itemId, actionObj) {
     if (!itemId) return;
+    const targetItem = items.find((i) => i.id === itemId) || cachedAllItems.find((i) => i.id === itemId);
+    let effectiveAction = actionObj.action;
+    if (effectiveAction === "pin" && targetItem && targetItem.pinned) {
+      effectiveAction = "unpin";
+    }
+    if (effectiveAction === "delete" || effectiveAction === "archive") {
+      playCreamySfx("delete");
+      if (targetItem) markItemHidden(targetItem);
+      const prevIdx = items.findIndex((i) => i.id === itemId);
+      items = items.filter((i) => i.id !== itemId);
+      cachedAllItems = cachedAllItems.filter((i) => i.id !== itemId);
+      recentCodes = recentCodes.filter((c) => c.item_id !== itemId);
+      updateCategoryCounts(cachedAllItems);
+      renderAccountSwitcher(cachedAllItems);
+      if (items.length > 0) {
+        const nextIdx = Math.min(Math.max(0, prevIdx), items.length - 1);
+        selectItem(items[nextIdx].id, false);
+      } else {
+        selectedId = null;
+        lastRenderedItemId = null;
+        $("readerContentWrap").classList.add("hidden");
+        $("readerEmptyState").classList.remove("hidden");
+      }
+      renderStream(true);
+      renderRecentCodes();
+    }
     await api("/api/actions", {
       method: "POST",
-      body: JSON.stringify({ item_id: itemId, ...actionObj })
+      body: JSON.stringify({ item_id: itemId, ...actionObj, action: effectiveAction })
     });
     const labels = {
       archive: lang === "vi" ? "Đã lưu trữ thư" : "Archived message",
       mark_read: lang === "vi" ? "Đã đánh dấu đã đọc" : "Marked as read",
       pin: lang === "vi" ? "Đã ghim thư" : "Pinned message",
+      unpin: lang === "vi" ? "Đã bỏ ghim thư" : "Unpinned message",
       delete: lang === "vi" ? "Đã xóa thư" : "Deleted message"
     };
-    if (labels[actionObj.action]) showToast(labels[actionObj.action]);
+    if (labels[effectiveAction]) showToast(labels[effectiveAction]);
     await loadAll();
   }
 
@@ -2723,8 +3310,7 @@ pub const APP_JS: &str = r##"(() => {
     submitBtn.disabled = true;
     submitTxt.textContent = lang === "vi" ? "Đang kết nối..." : "Connecting...";
 
-    const preset = $("accPreset").value;
-    const source = preset === "telegram" ? "telegram" : (preset === "rss" ? "rss" : "email");
+    const source = "email";
     const email = $("accEmail").value.trim();
     const host = $("accHost").value.trim();
     const port = Number($("accPort").value) || 993;
@@ -2837,6 +3423,39 @@ pub const APP_JS: &str = r##"(() => {
 
   $("btnSync").onclick = () => triggerSync(activeAccount || null, false);
 
+  $("btnSfx").onclick = () => {
+    sfxEnabled = !sfxEnabled;
+    try {
+      localStorage.setItem("vortex_sfx", sfxEnabled ? "1" : "0");
+    } catch (_) {}
+    applySfxButton();
+    if (sfxEnabled) {
+      playCreamySfx("copy");
+    }
+  };
+
+  $("btnTheme").onclick = () => {
+    theme = theme === "dark" ? "light" : "dark";
+    try {
+      localStorage.setItem("vortex_theme", theme);
+    } catch (_) {}
+    applyTheme(true);
+  };
+
+  document.addEventListener("pointerdown", (e) => {
+    const btn = e.target.closest("button");
+    if (!btn || btn.disabled || btn.id === "btnSfx") return;
+    if (btn.classList.contains("cat-btn") || btn.id === "btnAutoSort") {
+      playCreamySfx("pill");
+    } else if (btn.classList.contains("otp-copy") || btn.id === "btnCopyAllOtp") {
+      playCreamySfx("copy");
+    } else if (btn.getAttribute("data-act") === "delete" || btn.getAttribute("data-act") === "archive" || btn.classList.contains("acct-item-del")) {
+      playCreamySfx("delete");
+    } else {
+      playCreamySfx("click");
+    }
+  });
+
   $("btnLang").onclick = () => {
     lang = lang === "vi" ? "en" : "vi";
     applyTranslations();
@@ -2851,7 +3470,8 @@ pub const APP_JS: &str = r##"(() => {
         return;
       }
       const accParam = activeAccount ? `&account=${encodeURIComponent(activeAccount)}` : "";
-      items = await api(`/api/items?q=${encodeURIComponent(q)}${accParam}`);
+      const searched = await api(`/api/items?q=${encodeURIComponent(q)}${accParam}`);
+      items = sortItemsList(searched.filter(isItemVisible));
       renderStream();
     }, 180);
   };
@@ -2861,13 +3481,11 @@ pub const APP_JS: &str = r##"(() => {
     btn.onclick = () => {
       const nextCat = btn.getAttribute("data-cat") || "";
       if (nextCat === activeCategory) return;
-      const dir = idx >= prevCatIndex ? 1 : -1;
       prevCatIndex = idx;
       catButtons.forEach((b) => b.setAttribute("aria-pressed", "false"));
       btn.setAttribute("aria-pressed", "true");
       updateCategoryGlider();
       activeCategory = nextCat;
-      triggerStreamMorph(dir);
       loadAll(true);
     };
   });
@@ -2895,7 +3513,11 @@ pub const APP_JS: &str = r##"(() => {
   };
 
   window.addEventListener("resize", () => {
-    requestAnimationFrame(updateCategoryGlider);
+    requestAnimationFrame(() => {
+      updateCategoryGlider();
+      const activeBtn = document.querySelector('.category-pills .cat-btn[aria-pressed="true"]');
+      if (activeBtn) activeBtn.scrollIntoView({ block: "nearest", inline: "nearest" });
+    });
   });
 
   document.querySelectorAll("[data-act]").forEach((btn) => {
@@ -2926,8 +3548,7 @@ pub const APP_JS: &str = r##"(() => {
         return;
       }
       recentCodes = await api("/api/codes");
-      renderRecentCodes();
-    } catch (_) {}
+      } catch (_) {}
   }, 900);
 
   setInterval(() => {
@@ -2950,14 +3571,16 @@ pub const APP_JS: &str = r##"(() => {
     } catch (_) {}
   }, 900);
 
-  setInterval(renderRecentCodes, 1000);
+  applyTheme(false);
   selectPreset("gmail");
   loadAll();
 })();
 "##;
 
+pub const OTP_OVERLAY_HTML: &str = include_str!("otp_overlay.html");
+
 pub const fn bundle_size_bytes() -> u64 {
-    (INDEX_HTML.len() + STYLES_CSS.len() + APP_JS.len()) as u64
+    (INDEX_HTML.len() + STYLES_CSS.len() + APP_JS.len() + OTP_OVERLAY_HTML.len()) as u64
 }
 
 #[cfg(test)]
@@ -2973,6 +3596,10 @@ mod tests {
         assert!(!STYLES_CSS.contains("linear-gradient"));
         assert!(!STYLES_CSS.contains("radial-gradient"));
         assert!(!STYLES_CSS.contains("100vw"));
+        assert!(!STYLES_CSS.to_ascii_lowercase().contains("#000"));
+        assert!(!STYLES_CSS.to_ascii_lowercase().contains("#fff"));
+        assert!(!APP_JS.to_ascii_lowercase().contains("#000"));
+        assert!(!APP_JS.to_ascii_lowercase().contains("#fff"));
         assert!(STYLES_CSS.contains("overflow-x: clip"));
         assert!(STYLES_CSS.contains("prefers-reduced-motion: reduce"));
         assert!(INDEX_HTML.contains("viewBox=\"0 0 20 20\" fill=\"currentColor\""));
