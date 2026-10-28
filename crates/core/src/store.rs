@@ -188,7 +188,21 @@ impl SqliteStore {
                 shared_secret_hash TEXT NOT NULL,
                 paired_at INTEGER NOT NULL,
                 revoked INTEGER NOT NULL DEFAULT 0
-            );"
+            );
+            DELETE FROM items
+            WHERE (external_id LIKE ':%' OR external_id LIKE 'gmail-row-%' OR external_id LIKE 'gmail-msg-%' OR external_id LIKE 'tag:gmail.google.com%' OR external_id LIKE 'atom-%')
+              AND id NOT IN (
+                  SELECT id FROM (
+                      SELECT id, ROW_NUMBER() OVER (
+                          PARTITION BY source, account, sender, subject
+                          ORDER BY CASE WHEN external_id LIKE ':%' OR external_id LIKE 'gmail-row-%' OR external_id LIKE 'gmail-msg-%' OR external_id LIKE 'tag:gmail.google.com%' OR external_id LIKE 'atom-%' THEN 1 ELSE 0 END ASC,
+                                   LENGTH(body_html) DESC,
+                                   LENGTH(body_text) DESC,
+                                   id ASC
+                      ) AS rn
+                      FROM items
+                  ) WHERE rn = 1
+              );"
         ))
         .map_err(|e| format!("sqlite schema migration failed: {e}"))?;
 
@@ -235,6 +249,35 @@ impl SqliteStore {
         String::from_utf8(plain).unwrap_or_default()
     }
 
+    pub fn get_existing_received_at(
+        &self,
+        source: SourceKind,
+        account: &str,
+        external_id: &str,
+        subject: &str,
+    ) -> Option<i64> {
+        self.conn
+            .query_row(
+                "SELECT received_at FROM items
+                 WHERE source = ?1
+                   AND account = ?2
+                   AND (external_id = ?3 OR (subject = ?4 AND external_id LIKE 'tag:gmail.google.com%'))
+                 ORDER BY received_at DESC
+                 LIMIT 1",
+                params![source.as_str(), account, external_id, subject],
+                |row| row.get(0),
+            )
+            .optional()
+            .unwrap_or(None)
+    }
+
+    pub fn clear_recent_codes(&self) -> Result<(), String> {
+        self.conn
+            .execute("UPDATE recent_codes SET expires_at = 0 WHERE expires_at > 0", [])
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
     pub fn upsert_item(&self, item: &Item) -> Result<i64, String> {
         let start = Instant::now();
         let labels_json = serde_json::to_string(&item.labels).unwrap_or_else(|_| "[]".into());
@@ -247,14 +290,56 @@ impl SqliteStore {
         let gmail_labels_json =
             serde_json::to_string(&item.gmail_labels).unwrap_or_else(|_| "[]".into());
 
-        let body_text_stored = self.protect_field(&item.body_text, &item.external_id);
-        let body_html_stored = self.protect_field(&item.body_html, &item.external_id);
-        let codes_stored = self.protect_field(&codes_raw, &item.external_id);
-
         let tx = self
             .conn
             .unchecked_transaction()
             .map_err(|e| format!("begin transaction failed: {e}"))?;
+
+        if !item.external_id.starts_with("tag:gmail.google.com")
+            && !item.external_id.starts_with("atom-")
+            && !item.external_id.starts_with("gmail-row-")
+            && !item.external_id.starts_with("gmail-msg-")
+            && !item.external_id.starts_with(':')
+        {
+            let exact_exists: Option<i64> = tx
+                .query_row(
+                    "SELECT id FROM items WHERE source = ?1 AND account = ?2 AND external_id = ?3",
+                    params![item.source.as_str(), item.account, item.external_id],
+                    |row| row.get(0),
+                )
+                .optional()
+                .unwrap_or(None);
+            if exact_exists.is_none() {
+                let _ = tx.execute(
+                    "UPDATE items
+                     SET external_id = ?4
+                     WHERE id = (
+                         SELECT id FROM items
+                         WHERE source = ?1
+                           AND account = ?2
+                           AND subject = ?3
+                           AND (external_id LIKE 'tag:gmail.google.com%' OR external_id LIKE 'atom-%' OR external_id LIKE 'gmail-row-%' OR external_id LIKE 'gmail-msg-%' OR external_id LIKE ':%')
+                         ORDER BY LENGTH(body_html) DESC, LENGTH(body_text) DESC, received_at DESC
+                         LIMIT 1
+                     )",
+                    params![item.source.as_str(), item.account, item.subject, item.external_id],
+                );
+            }
+            let _ = tx.execute(
+                "DELETE FROM items
+                 WHERE source = ?1
+                   AND account = ?2
+                   AND subject = ?3
+                   AND external_id != ?4
+                   AND (external_id LIKE 'tag:gmail.google.com%' OR external_id LIKE 'atom-%' OR external_id LIKE 'gmail-row-%' OR external_id LIKE 'gmail-msg-%' OR external_id LIKE ':%')",
+                params![item.source.as_str(), item.account, item.subject, item.external_id],
+            );
+        }
+
+        let effective_ext_id = item.external_id.clone();
+        let body_text_stored = self.protect_field(&item.body_text, &effective_ext_id);
+        let body_html_stored = self.protect_field(&item.body_html, &effective_ext_id);
+        let codes_stored = self.protect_field(&codes_raw, &effective_ext_id);
 
         tx.execute(
             "INSERT INTO items (
@@ -274,11 +359,13 @@ impl SqliteStore {
                     sender = excluded.sender,
                     subject = excluded.subject,
                     body_text = CASE
-                        WHEN excluded.body_text != '' THEN excluded.body_text
+                        WHEN LENGTH(excluded.body_text) >= LENGTH(items.body_text) AND excluded.body_text != '' THEN excluded.body_text
+                        WHEN items.body_text = '' THEN excluded.body_text
                         ELSE items.body_text
                     END,
                     body_html = CASE
-                        WHEN excluded.body_html != '' THEN excluded.body_html
+                        WHEN LENGTH(excluded.body_html) >= LENGTH(items.body_html) AND excluded.body_html != '' THEN excluded.body_html
+                        WHEN items.body_html = '' THEN excluded.body_html
                         ELSE items.body_html
                     END,
                     state = CASE
@@ -290,21 +377,39 @@ impl SqliteStore {
                         WHEN items.pinned = 1 THEN 1
                         ELSE excluded.pinned
                     END,
-                    labels_json = excluded.labels_json,
-                    category = excluded.category,
-                    codes_json = excluded.codes_json,
-                    links_json = excluded.links_json,
-                    entities_json = excluded.entities_json,
-                    phishing_score = excluded.phishing_score,
-                    phishing_warning = excluded.phishing_warning,
-                    unsubscribe_link = excluded.unsubscribe_link,
-                    summary = excluded.summary,
-                    priority_score = excluded.priority_score,
+                    labels_json = CASE
+                        WHEN LENGTH(items.body_text) > LENGTH(excluded.body_text) AND items.category != 'other' THEN items.labels_json
+                        ELSE excluded.labels_json
+                    END,
+                    category = CASE
+                        WHEN items.category != 'other' AND (excluded.category = 'other' OR LENGTH(items.body_text) > LENGTH(excluded.body_text)) THEN items.category
+                        ELSE excluded.category
+                    END,
+                    codes_json = CASE
+                        WHEN items.codes_json != '[]' AND LENGTH(items.codes_json) >= LENGTH(excluded.codes_json) THEN items.codes_json
+                        ELSE excluded.codes_json
+                    END,
+                    links_json = CASE
+                        WHEN items.links_json != '[]' AND LENGTH(items.links_json) >= LENGTH(excluded.links_json) THEN items.links_json
+                        ELSE excluded.links_json
+                    END,
+                    entities_json = CASE
+                        WHEN items.entities_json != '[]' AND LENGTH(items.entities_json) >= LENGTH(excluded.entities_json) THEN items.entities_json
+                        ELSE excluded.entities_json
+                    END,
+                    phishing_score = MAX(items.phishing_score, excluded.phishing_score),
+                    phishing_warning = COALESCE(excluded.phishing_warning, items.phishing_warning),
+                    unsubscribe_link = COALESCE(excluded.unsubscribe_link, items.unsubscribe_link),
+                    summary = CASE
+                        WHEN LENGTH(items.body_text) > LENGTH(excluded.body_text) AND items.summary IS NOT NULL THEN items.summary
+                        ELSE excluded.summary
+                    END,
+                    priority_score = MAX(items.priority_score, excluded.priority_score),
                     gmail_labels_json = excluded.gmail_labels_json",
             params![
                 item.source.as_str(),
                 item.account,
-                item.external_id,
+                effective_ext_id,
                 item.sender,
                 item.sender_domain,
                 item.recipient,
@@ -335,7 +440,7 @@ impl SqliteStore {
         let row_id: i64 = tx
             .query_row(
                 "SELECT id FROM items WHERE source = ?1 AND account = ?2 AND external_id = ?3",
-                params![item.source.as_str(), item.account, item.external_id],
+                params![item.source.as_str(), item.account, effective_ext_id],
                 |row| row.get(0),
             )
             .map_err(|e| format!("query item id failed: {e}"))?;
@@ -471,7 +576,7 @@ impl SqliteStore {
                     )
                     .map_err(|e| e.to_string())?;
                 let _ = self.conn.execute(
-                    "DELETE FROM recent_codes WHERE item_id = ?1",
+                    "UPDATE recent_codes SET expires_at = 0 WHERE item_id = ?1",
                     params![item_id],
                 );
             }
@@ -483,7 +588,7 @@ impl SqliteStore {
                     )
                     .map_err(|e| e.to_string())?;
                 let _ = self.conn.execute(
-                    "DELETE FROM recent_codes WHERE item_id = ?1",
+                    "UPDATE recent_codes SET expires_at = 0 WHERE item_id = ?1",
                     params![item_id],
                 );
             }
@@ -580,6 +685,75 @@ impl SqliteStore {
     }
 
     pub fn list_recent_codes(&self, now_epoch: i64) -> Result<Vec<OtpPopupEvent>, String> {
+        let total_tracked: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM recent_codes", [], |r| r.get(0))
+            .unwrap_or(0);
+        if total_tracked == 0 {
+            let mut seed_stmt = self
+                .conn
+                .prepare(
+                    "SELECT id, account, external_id, sender, COALESCE(recipient, ''), subject, codes_json, received_at, state
+                     FROM items
+                     WHERE category = 'code_otp'
+                       AND state NOT IN ('trash', 'archived', 'spam')
+                     ORDER BY received_at DESC
+                     LIMIT 25",
+                )
+                .map_err(|e| e.to_string())?;
+            let seed_rows: Vec<(i64, String, String, String, String, String, String, i64, String)> = seed_stmt
+                .query_map([], |r| {
+                    Ok((
+                        r.get(0)?,
+                        r.get(1)?,
+                        r.get(2)?,
+                        r.get(3)?,
+                        r.get(4)?,
+                        r.get(5)?,
+                        r.get(6)?,
+                        r.get(7)?,
+                        r.get(8)?,
+                    ))
+                })
+                .map_err(|e| e.to_string())?
+                .flatten()
+                .collect();
+            let mut activated_latest = false;
+            for (item_id, account, ext_id, sender, recipient, subject, codes_stored, recv_at, state_str) in seed_rows {
+                let raw = self.unprotect_field(&codes_stored, &ext_id);
+                let extracted: Vec<crate::model::ExtractedCode> =
+                    serde_json::from_str(&raw).unwrap_or_default();
+                if let Some(first) = extracted.first() {
+                    let hash = OtpPopupEvent::compute_dedup_hash(
+                        &format!("{account}:{subject}"),
+                        &first.code,
+                    );
+                    let exp = if !activated_latest && state_str == "unread" {
+                        activated_latest = true;
+                        now_epoch + 600
+                    } else {
+                        0
+                    };
+                    let ev = OtpPopupEvent {
+                        item_id,
+                        message_id: ext_id,
+                        code_hash: hash,
+                        code: first.code.clone(),
+                        sender,
+                        account,
+                        recipient,
+                        service: first.service.clone(),
+                        received_at: recv_at,
+                        expires_at: exp,
+                        verification_link: first.verification_link.clone(),
+                        phishing_warning: None,
+                        detected_latency_ms: 1,
+                    };
+                    let _ = self.record_recent_code(&ev);
+                }
+            }
+        }
+
         let mut stmt = self
             .conn
             .prepare(
@@ -636,8 +810,8 @@ impl SqliteStore {
             )
             .map_err(|e| format!("prune_expired_bodies failed: {e}"))?;
         let _ = self.conn.execute(
-            "DELETE FROM recent_codes WHERE expires_at <= ?1",
-            params![now_epoch],
+            "DELETE FROM recent_codes WHERE received_at < ?1",
+            params![now_epoch - 7 * 86_400],
         );
         Ok(updated)
     }
@@ -713,12 +887,30 @@ impl SqliteStore {
         source: SourceKind,
         account: &str,
     ) -> Result<u32, String> {
+        let incomplete_count: i64 = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*)
+                 FROM items
+                 WHERE source = ?1
+                   AND account = ?2
+                   AND (body_html = '' OR LENGTH(body_text) < 260)",
+                params![source.as_str(), account],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+        if incomplete_count > 0 {
+            return Ok(0);
+        }
         let max_uid: Option<i64> = self
             .conn
             .query_row(
                 "SELECT MAX(CAST(external_id AS INTEGER))
                  FROM items
-                 WHERE source = ?1 AND account = ?2",
+                 WHERE source = ?1
+                   AND account = ?2
+                   AND external_id GLOB '[0-9]*'
+                   AND NOT external_id GLOB '*[^0-9]*'",
                 params![source.as_str(), account],
                 |row| row.get(0),
             )

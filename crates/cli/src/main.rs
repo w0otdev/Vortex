@@ -454,14 +454,20 @@ fn run_native_window(url: &str, state: Arc<Mutex<DaemonState>>) -> ExitCode {
     use wry::{WebContext, WebViewBuilder};
 
     enum DesktopEvent {
-        Show,
+        Show(usize),
+        Resize(usize),
         Hide,
         Refresh,
+        WindowDrag,
+        WindowMinimize,
+        WindowToggleMax,
+        WindowClose,
     }
 
     let event_loop = EventLoopBuilder::<DesktopEvent>::with_user_event().build();
     let window = match WindowBuilder::new()
         .with_title("Vortex")
+        .with_decorations(false)
         .with_window_icon(load_window_icon())
         .with_taskbar_icon(load_window_icon())
         .with_inner_size(LogicalSize::new(1260.0, 820.0))
@@ -477,10 +483,21 @@ fn run_native_window(url: &str, state: Arc<Mutex<DaemonState>>) -> ExitCode {
         }
     };
 
+    let main_proxy = event_loop.create_proxy();
     let data_dir = env::temp_dir().join("vortex-inbox-webview2");
     let mut web_context = WebContext::new(Some(data_dir));
     let webview = match WebViewBuilder::with_web_context(&mut web_context)
         .with_url(url)
+        .with_ipc_handler(move |request| {
+            let ev = match request.body().as_str() {
+                "win:drag" => DesktopEvent::WindowDrag,
+                "win:min" => DesktopEvent::WindowMinimize,
+                "win:max" => DesktopEvent::WindowToggleMax,
+                "win:close" => DesktopEvent::WindowClose,
+                _ => return,
+            };
+            let _ = main_proxy.send_event(ev);
+        })
         .build(&window)
     {
         Ok(wv) => wv,
@@ -490,26 +507,30 @@ fn run_native_window(url: &str, state: Arc<Mutex<DaemonState>>) -> ExitCode {
         }
     };
 
-    let overlay_layout = |window: &tao::window::Window| {
-        window.current_monitor().map(|monitor| {
-            let scale = monitor.scale_factor();
-            let size = monitor.size().to_logical::<f64>(scale);
-            let position = monitor.position().to_logical::<f64>(scale);
-            let width = (size.width - 40.0).clamp(1.0, 1280.0);
-            let height: f64 = if width < 640.0 { 208.0 } else { 185.0 };
-            let height = height.min((size.height - 40.0).max(1.0));
-            let x = position.x + (size.width - width) / 2.0;
-            let y = position.y + (size.height - height - 72.0).max(0.0);
-            (width, height, LogicalPosition::new(x, y))
-        }).unwrap_or((900.0, 185.0, LogicalPosition::new(80.0, 500.0)))
+    let overlay_layout = |window: &tao::window::Window, count: usize| {
+        let cards = count.clamp(1, 2);
+        let width: f64 = 304.0;
+        let height: f64 = if cards >= 2 { 164.0 } else { 84.0 };
+        window
+            .current_monitor()
+            .map(|monitor| {
+                let scale = monitor.scale_factor();
+                let size = monitor.size().to_logical::<f64>(scale);
+                let position = monitor.position().to_logical::<f64>(scale);
+                let x = position.x + (size.width - width - 20.0).max(8.0);
+                let y = position.y + (size.height - height - 56.0).max(8.0);
+                (width, height, LogicalPosition::new(x, y))
+            })
+            .unwrap_or((width, height, LogicalPosition::new(80.0, 500.0)))
     };
-    let (overlay_width, overlay_height, overlay_position) = overlay_layout(&window);
+    let (overlay_width, overlay_height, overlay_position) = overlay_layout(&window, 1);
 
     let overlay_window = match WindowBuilder::new()
         .with_title("Vortex OTP")
         .with_inner_size(LogicalSize::new(overlay_width, overlay_height))
         .with_position(overlay_position)
         .with_decorations(false)
+        .with_transparent(true)
         .with_resizable(false)
         .with_visible(false)
         .with_focused(false)
@@ -526,12 +547,20 @@ fn run_native_window(url: &str, state: Arc<Mutex<DaemonState>>) -> ExitCode {
     let overlay_proxy = event_loop.create_proxy();
     let overlay_url = format!("{url}/otp-overlay");
     let overlay_webview = match WebViewBuilder::with_web_context(&mut web_context)
+        .with_transparent(true)
         .with_url(&overlay_url)
         .with_ipc_handler(move |request| {
-            let event = match request.body().as_str() {
-                "otp-overlay:show" => DesktopEvent::Show,
-                "otp-overlay:hide" => DesktopEvent::Hide,
-                _ => return,
+            let body = request.body();
+            let event = if let Some(n) = body.strip_prefix("otp-overlay:show:") {
+                DesktopEvent::Show(n.parse().unwrap_or(1))
+            } else if let Some(n) = body.strip_prefix("otp-overlay:resize:") {
+                DesktopEvent::Resize(n.parse().unwrap_or(1))
+            } else if body == "otp-overlay:show" {
+                DesktopEvent::Show(1)
+            } else if body == "otp-overlay:hide" {
+                DesktopEvent::Hide
+            } else {
+                return;
             };
             let _ = overlay_proxy.send_event(event);
         })
@@ -547,6 +576,7 @@ fn run_native_window(url: &str, state: Arc<Mutex<DaemonState>>) -> ExitCode {
     // Wake the overlay on changes even when WebView2 throttles hidden-page timers.
     let refresh_proxy = event_loop.create_proxy();
     thread::spawn(move || {
+        thread::sleep(Duration::from_millis(500));
         let mut previous = Vec::new();
         loop {
             let current = state.lock().ok().and_then(|guard| {
@@ -557,12 +587,16 @@ fn run_native_window(url: &str, state: Arc<Mutex<DaemonState>>) -> ExitCode {
             if let Some(current) = current
                 && current != previous
             {
+                let count = current.len();
                 previous = current;
-                if refresh_proxy.send_event(DesktopEvent::Refresh).is_err() {
-                    break;
-                }
+                let _ = refresh_proxy.send_event(DesktopEvent::Refresh);
+                let _ = refresh_proxy.send_event(if count > 0 {
+                    DesktopEvent::Show(count.min(2))
+                } else {
+                    DesktopEvent::Hide
+                });
             }
-            thread::sleep(Duration::from_secs(1));
+            thread::sleep(Duration::from_millis(800));
         }
     });
 
@@ -588,17 +622,36 @@ fn run_native_window(url: &str, state: Arc<Mutex<DaemonState>>) -> ExitCode {
                 window.set_always_on_top(false);
                 window.set_focus();
             }
-            Event::UserEvent(DesktopEvent::Show) => {
-                let (width, height, position) = overlay_layout(&window);
+            Event::UserEvent(DesktopEvent::Show(count)) => {
+                let (width, height, position) = overlay_layout(&window, count);
                 overlay_window.set_inner_size(LogicalSize::new(width, height));
                 overlay_window.set_outer_position(position);
+                overlay_window.set_always_on_top(true);
                 overlay_window.set_visible(true);
+                let _ = overlay_webview.evaluate_script("window.refreshOtpOverlay?.()");
+            }
+            Event::UserEvent(DesktopEvent::Resize(count)) => {
+                let (width, height, position) = overlay_layout(&window, count);
+                overlay_window.set_inner_size(LogicalSize::new(width, height));
+                overlay_window.set_outer_position(position);
             }
             Event::UserEvent(DesktopEvent::Hide) => {
                 overlay_window.set_visible(false);
             }
             Event::UserEvent(DesktopEvent::Refresh) => {
                 let _ = overlay_webview.evaluate_script("window.refreshOtpOverlay?.()");
+            }
+            Event::UserEvent(DesktopEvent::WindowDrag) => {
+                let _ = window.drag_window();
+            }
+            Event::UserEvent(DesktopEvent::WindowMinimize) => {
+                window.set_minimized(true);
+            }
+            Event::UserEvent(DesktopEvent::WindowToggleMax) => {
+                window.set_maximized(!window.is_maximized());
+            }
+            Event::UserEvent(DesktopEvent::WindowClose) => {
+                *control_flow = ControlFlow::Exit;
             }
             Event::WindowEvent {
                 event: WindowEvent::CloseRequested,
@@ -642,7 +695,7 @@ fn run_google_login_window(args: &[String]) -> ExitCode {
 
     if silent {
         std::thread::spawn(|| {
-            std::thread::sleep(Duration::from_secs(12));
+            std::thread::sleep(Duration::from_secs(24));
             std::process::exit(0);
         });
     }
@@ -759,7 +812,20 @@ fn run_google_login_window(args: &[String]) -> ExitCode {
         }}
       }}
       const entries = Array.from(doc.querySelectorAll("entry")).map((en, idx) => {{
-        const id = ((en.querySelector("id") || {{}}).textContent || "").trim() || ("atom-" + idx);
+        const rawAtomId = ((en.querySelector("id") || {{}}).textContent || "").trim();
+        const linkEl = en.querySelector("link[href]");
+        const linkHref = (linkEl && linkEl.getAttribute("href")) || "";
+        let hexId = "";
+        const msgIdMatch = linkHref.match(/[?&](?:message_id|th)=([0-9a-fA-F]{{12,24}})/);
+        if (msgIdMatch) {{
+          hexId = msgIdMatch[1].toLowerCase();
+        }} else {{
+          const decMatch = rawAtomId.match(/:(\d{{15,22}})$/);
+          if (decMatch) {{
+            try {{ hexId = BigInt(decMatch[1]).toString(16); }} catch (_) {{}}
+          }}
+        }}
+        const id = hexId || rawAtomId || ("atom-" + idx);
         const subject = ((en.querySelector("title") || {{}}).textContent || "").trim() || "(Không có tiêu đề)";
         const summary = ((en.querySelector("summary") || {{}}).textContent || "").trim();
         const issued = ((en.querySelector("issued") || en.querySelector("modified") || {{}}).textContent || "").trim();
@@ -771,9 +837,11 @@ fn run_google_login_window(args: &[String]) -> ExitCode {
         const parsedTs = issued ? Math.floor(Date.parse(issued) / 1000) : 0;
         return {{
           id,
+          hexId,
           sender,
           subject,
           body: summary || subject,
+          body_html: "",
           received_at: Number.isFinite(parsedTs) && parsedTs > 0 ? parsedTs : (Math.floor(Date.now() / 1000) - idx * 60),
           unread: true
         }};
@@ -793,24 +861,36 @@ fn run_google_login_window(args: &[String]) -> ExitCode {
     return atomCache;
   }}
 
+  let additionalSyncPromise = null;
+
   async function syncAdditionalSilentAccounts(primaryEmail) {{
     if (!IS_SILENT || !window.ipc) return;
-    const targets = (DEFAULT_EMAIL || "").split(",").map((s) => s.trim()).filter(Boolean);
-    const urls = ["/mail/u/0/feed/atom", "/mail/u/1/feed/atom", "/mail/u/2/feed/atom", "/mail/u/3/feed/atom"];
-    for (const em of targets) {{
-      urls.push("/mail/feed/atom?authuser=" + encodeURIComponent(em));
-    }}
-    const seenEmails = new Set(primaryEmail ? [primaryEmail.toLowerCase()] : []);
-    await Promise.all(urls.map(async (u) => {{
-      const parsed = await parseAtomUrl(u);
-      if (parsed && parsed.email && !seenEmails.has(parsed.email.toLowerCase())) {{
-        seenEmails.add(parsed.email.toLowerCase());
-        window.ipc.postMessage("WEB_SYNC_PROGRESS:" + JSON.stringify({{
-          email: parsed.email,
-          messages: parsed.entries || []
-        }}));
+    if (additionalSyncPromise) return additionalSyncPromise;
+    additionalSyncPromise = (async () => {{
+      const targets = (DEFAULT_EMAIL || "").split(",").map((s) => s.trim()).filter(Boolean);
+      const urls = ["/mail/u/0/feed/atom", "/mail/u/1/feed/atom", "/mail/u/2/feed/atom", "/mail/u/3/feed/atom"];
+      for (const em of targets) {{
+        urls.push("/mail/feed/atom?authuser=" + encodeURIComponent(em));
       }}
-    }}));
+      const allowed = new Set(targets.map((t) => t.toLowerCase()));
+      const seenEmails = new Set(primaryEmail ? [primaryEmail.toLowerCase()] : []);
+      for (const u of urls) {{
+        const parsed = await parseAtomUrl(u);
+        const emLower = parsed && parsed.email ? parsed.email.toLowerCase() : "";
+        if (parsed && emLower && !seenEmails.has(emLower) && (allowed.size === 0 || allowed.has(emLower))) {{
+          seenEmails.add(emLower);
+          const entries = parsed.entries || [];
+          const baseMatch = u.match(/^\/mail\/u\/\d+\//);
+          const resolved = await resolveIkAndBase(baseMatch ? baseMatch[0] : "", parsed.email);
+          await enrichFullBodies(entries, resolved.ik, resolved.base, parsed.email);
+          window.ipc.postMessage("WEB_SYNC_PROGRESS:" + JSON.stringify({{
+            email: parsed.email,
+            messages: entries
+          }}));
+        }}
+      }}
+    }})();
+    return additionalSyncPromise;
   }}
 
   function collectDomRows() {{
@@ -839,16 +919,38 @@ fn run_google_login_window(args: &[String]) -> ExitCode {
         || (legacyEl && (legacyEl.getAttribute("data-legacy-thread-id") || legacyEl.getAttribute("data-legacy-last-non-draft-message-id")))
         || "";
       if (!hexId) {{
-        const thEl = tr.querySelector("[data-thread-id]");
-        const rawTh = (thEl && thEl.getAttribute("data-thread-id")) || "";
+        const thEl = tr.querySelector("[data-thread-id],[data-thread-perm-id]");
+        const rawTh = (thEl && (thEl.getAttribute("data-thread-id") || thEl.getAttribute("data-thread-perm-id"))) || "";
         const decMatch = rawTh.match(/(\d{{15,22}})/);
         if (decMatch) {{
           try {{ hexId = BigInt(decMatch[1]).toString(16); }} catch (_) {{}}
         }}
       }}
       const extId = hexId
-        || tr.id
-        || ("gmail-row-" + idx + "-" + subject.slice(0, 20));
+        || ("gmail-msg-" + (senderEmail || senderName || "gmail").toLowerCase() + "-" + subject.toLowerCase());
+      let rowTs = unread && idx === 0 ? nowSec : (nowSec - 3600 - idx * 120);
+      const dateEl = tr.querySelector("td.xW span[title], td.xW span");
+      const rawDate = dateEl ? (dateEl.getAttribute("title") || dateEl.innerText || "").trim() : "";
+      if (rawDate) {{
+        const parsedMs = Date.parse(rawDate);
+        if (Number.isFinite(parsedMs) && parsedMs > 946684800000) {{
+          rowTs = Math.floor(parsedMs / 1000);
+        }} else {{
+          const tm = rawDate.match(/(\d{{1,2}}):(\d{{2}})(?:\s*(AM|PM|SA|CH))?/i);
+          if (tm) {{
+            let hh = parseInt(tm[1], 10);
+            const mm = parseInt(tm[2], 10);
+            const ap = (tm[3] || "").toUpperCase();
+            if ((ap === "PM" || ap === "CH") && hh < 12) hh += 12;
+            if ((ap === "AM" || ap === "SA") && hh === 12) hh = 0;
+            const d = new Date();
+            d.setHours(hh, mm, 0, 0);
+            let ts = Math.floor(d.getTime() / 1000);
+            if (ts > nowSec + 120) ts -= 86400;
+            rowTs = ts;
+          }}
+        }}
+      }}
       out.push({{
         id: extId,
         hexId,
@@ -856,7 +958,7 @@ fn run_google_login_window(args: &[String]) -> ExitCode {
         subject,
         body: snippet || subject,
         body_html: "",
-        received_at: nowSec - idx * 60,
+        received_at: rowTs,
         unread
       }});
     }});
@@ -875,73 +977,179 @@ fn run_google_login_window(args: &[String]) -> ExitCode {
         return window.GLOBALS[9];
       }}
     }}
+    try {{
+      const resEntries = performance.getEntriesByType("resource") || [];
+      for (const re of resEntries) {{
+        const m = (re.name || "").match(/[?&]ik=([0-9a-f]{{6,20}})/i);
+        if (m) return m[1];
+      }}
+    }} catch (_) {{}}
     const html = (document.documentElement && document.documentElement.innerHTML) || "";
-    const m1 = html.match(/["']([0-9a-f]{{8,16}})["']\s*,\s*["'][a-zA-Z0-9._%+-]+@gmail\.com["']/i);
+    const m0 = html.match(/GLOBALS\s*=\s*\[(?:[^,\]]*,){{9}}\s*["']([0-9a-f]{{6,20}})["']/i);
+    if (m0) return m0[1];
+    const m1 = html.match(/["']([0-9a-f]{{8,16}})["']\s*,\s*["'][a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{{2,}}["']/i);
     if (m1) return m1[1];
     const m2 = html.match(/[?&]ik=([0-9a-f]{{6,20}})/i);
     return m2 ? m2[1] : "";
   }}
 
-  async function enrichFullBodies(rows, ik) {{
-    if (!ik || !rows.length) return;
-    const base = mailBasePath();
-    const targets = rows.slice(0, 6).filter((r) => r.hexId);
-    await Promise.all(targets.map(async (r) => {{
+  async function resolveIkAndBase(hintBase, userEmail) {{
+    if (hintBase === mailBasePath() && (!userEmail || userEmail.toLowerCase() === detectEmail("").toLowerCase())) {{
+      const localIk = detectIk(userEmail);
+      if (localIk) return {{ ik: localIk, base: mailBasePath() }};
+    }}
+    const fetchUrl = userEmail
+      ? ("/mail/?authuser=" + encodeURIComponent(userEmail))
+      : (hintBase || mailBasePath());
+    try {{
       const ctrl = new AbortController();
-      const timer = setTimeout(() => ctrl.abort(), 1200);
-      try {{
-        const url = base + "?ui=2&ik=" + encodeURIComponent(ik) + "&view=pt&search=all&th=" + encodeURIComponent(r.hexId);
-        const res = await fetch(url, {{ credentials: "include", signal: ctrl.signal }});
-        if (!res.ok) return;
-        const html = await res.text();
-        const doc = new DOMParser().parseFromString(html, "text/html");
-        doc.querySelectorAll("script, meta, title").forEach((n) => n.remove());
-        const msgTables = Array.from(doc.querySelectorAll("table.message"));
-        let bodyNode = null;
-        if (msgTables.length > 0) {{
-          const lastTbl = msgTables[msgTables.length - 1];
-          const trs = Array.from(lastTbl.querySelectorAll(":scope > tbody > tr, :scope > tr"));
-          bodyNode = trs.length > 0 ? trs[trs.length - 1] : lastTbl;
-        }} else {{
-          bodyNode = doc.querySelector(".maincontent") || doc.body;
-        }}
-        if (bodyNode) {{
-          const cleanHtml = (bodyNode.innerHTML || "").trim();
-          const cleanTxt = (bodyNode.innerText || bodyNode.textContent || "").trim();
-          if (cleanHtml.length > 20) {{
-            r.body_html = cleanHtml;
-          }}
-          if (cleanTxt.length > (r.body || "").length) {{
-            r.body = cleanTxt;
-          }}
-        }}
-      }} catch (_) {{
-      }} finally {{
-        clearTimeout(timer);
+      const t = setTimeout(() => ctrl.abort(), 5500);
+      const res = await fetch(fetchUrl, {{ credentials: "include", signal: ctrl.signal }});
+      clearTimeout(t);
+      if (!res.ok) return {{ ik: "", base: hintBase || "/mail/u/0/" }};
+      let resolvedBase = hintBase || "/mail/u/0/";
+      if (res.url) {{
+        const um = res.url.match(/\/mail\/u\/\d+\//);
+        if (um) resolvedBase = um[0];
       }}
-    }}));
+      const html = await res.text();
+      if (!resolvedBase || resolvedBase === "/mail/u/0/") {{
+        const bm = html.match(/\/mail\/u\/\d+\//);
+        if (bm) resolvedBase = bm[0];
+      }}
+      if (userEmail) {{
+        const lowHtml = html.toLowerCase();
+        const lowEmail = userEmail.toLowerCase();
+        if (!lowHtml.includes(lowEmail)) {{
+          return {{ ik: "", base: resolvedBase, signedOut: true }};
+        }}
+        let pos = lowHtml.indexOf(lowEmail);
+        while (pos !== -1) {{
+          const windowBefore = html.slice(Math.max(0, pos - 80), pos);
+          const m = windowBefore.match(/["']([0-9a-f]{{8,20}})["']\s*,\s*["']$/i);
+          if (m) return {{ ik: m[1], base: resolvedBase }};
+          pos = lowHtml.indexOf(lowEmail, pos + lowEmail.length);
+        }}
+      }}
+      const m1 = html.match(/["']([0-9a-f]{{8,20}})["']\s*,\s*["'][a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{{2,}}["']/i);
+      if (m1) return {{ ik: m1[1], base: resolvedBase }};
+      const m0 = html.match(/GLOBALS\s*=\s*\[(?:[^,\]]*,){{9}}\s*["']([0-9a-f]{{6,20}})["']/i);
+      if (m0) return {{ ik: m0[1], base: resolvedBase }};
+      const m2 = html.match(/[?&]ik=([0-9a-f]{{6,20}})/i);
+      if (m2) return {{ ik: m2[1], base: resolvedBase }};
+      return {{ ik: "", base: resolvedBase }};
+    }} catch (_) {{}}
+    return {{ ik: "", base: hintBase || "/mail/u/0/" }};
+  }}
+
+  function cleanExtractedNodes(root) {{
+    root.querySelectorAll("script, style, meta, title, link, [style*='display:none'], [style*='visibility:hidden']").forEach((n) => n.remove());
+    let cleanHtml = (root.innerHTML || "").trim();
+    let cleanTxt = (root.innerText || root.textContent || "").trim();
+    if (/^(?:<!doctype|<html)/i.test(cleanTxt)) {{
+      const innerDoc = new DOMParser().parseFromString(cleanTxt, "text/html");
+      innerDoc.querySelectorAll("script, style, meta, title, link, [style*='display:none'], [style*='visibility:hidden']").forEach((n) => n.remove());
+      if (innerDoc.body) {{
+        cleanHtml = (innerDoc.body.innerHTML || "").trim();
+        cleanTxt = (innerDoc.body.innerText || innerDoc.body.textContent || "").trim();
+      }}
+    }}
+    return {{ cleanHtml, cleanTxt }};
+  }}
+
+  function extractPrintViewBody(html) {{
+    const doc = new DOMParser().parseFromString(html, "text/html");
+    const msgTables = Array.from(doc.querySelectorAll("table.message"));
+    if (msgTables.length > 0) {{
+      const lastTbl = msgTables[msgTables.length - 1];
+      const trs = Array.from(lastTbl.querySelectorAll(":scope > tbody > tr, :scope > tr"));
+      const bodyNode = trs.length > 0 ? trs[trs.length - 1] : lastTbl;
+      const res = cleanExtractedNodes(bodyNode);
+      if (res.cleanTxt.length > 10) return res;
+    }}
+    const specificNode = doc.querySelector(".maincontent, .a3s, .ii.gt, .msg");
+    if (specificNode) {{
+      const res = cleanExtractedNodes(specificNode);
+      if (res.cleanTxt.length > 10) return res;
+    }}
+    return null;
+  }}
+
+  async function enrichFullBodies(rows, ik, customBase, userEmail) {{
+    if (!rows || !rows.length) return;
+    let base = customBase || mailBasePath();
+    let activeIk = ik || "";
+    if (!activeIk) {{
+      const resolved = await resolveIkAndBase(base, userEmail || "");
+      activeIk = resolved.ik;
+      if (resolved.base) base = resolved.base;
+    }}
+    const targets = rows.slice(0, 20).filter((r) => r.hexId || /^[0-9a-f]{{12,24}}$/i.test(r.id || ""));
+    for (let i = 0; i < targets.length; i += 6) {{
+      const batch = targets.slice(i, i + 6);
+      await Promise.all(batch.map(async (r) => {{
+        const thId = r.hexId || r.id;
+        const urls = [];
+        if (activeIk) {{
+          urls.push(base + "?ui=2&ik=" + encodeURIComponent(activeIk) + "&view=pt&search=all&th=" + encodeURIComponent(thId));
+        }}
+        if (userEmail) {{
+          const authParam = "authuser=" + encodeURIComponent(userEmail);
+          if (activeIk) {{
+            urls.push("/mail/?ui=2&" + authParam + "&ik=" + encodeURIComponent(activeIk) + "&view=pt&search=all&th=" + encodeURIComponent(thId));
+          }}
+        }}
+        urls.push(base + "h/vortex/?v=pt&th=" + encodeURIComponent(thId));
+        urls.push(base + "h/vortex/?v=c&th=" + encodeURIComponent(thId));
+        for (const url of urls) {{
+          const ctrl = new AbortController();
+          const timer = setTimeout(() => ctrl.abort(), 3500);
+          try {{
+            const res = await fetch(url, {{ credentials: "include", signal: ctrl.signal }});
+            clearTimeout(timer);
+            if (!res.ok) continue;
+            const text = await res.text();
+            const parsed = extractPrintViewBody(text);
+            if (parsed && (parsed.cleanHtml.length > 40 || parsed.cleanTxt.length > (r.body || "").length)) {{
+              if (parsed.cleanHtml.length > 40) r.body_html = parsed.cleanHtml;
+              if (parsed.cleanTxt.length > (r.body || "").length) r.body = parsed.cleanTxt;
+              break;
+            }}
+          }} catch (_) {{
+            clearTimeout(timer);
+          }}
+        }}
+      }}));
+    }}
   }}
 
   function mergeMessages(domRows, atom) {{
     const merged = [];
-    const seenKeys = new Set();
+    const byKey = new Map();
+    const normKey = (item) => (item.hexId || item.id || item.subject || "").toLowerCase();
     for (const r of domRows) {{
-      const key = (r.subject || "").toLowerCase();
-      if (atom && atom.entries) {{
-        const match = atom.entries.find((a) => (a.subject || "").toLowerCase() === key);
-        if (match && match.body && match.body.length > r.body.length) {{
-          r.body = match.body;
-          r.received_at = match.received_at || r.received_at;
-        }}
-      }}
-      seenKeys.add(key);
+      const k = normKey(r);
+      byKey.set(k, r);
       merged.push(r);
     }}
     if (atom && atom.entries) {{
       for (const a of atom.entries) {{
-        const key = (a.subject || "").toLowerCase();
-        if (!seenKeys.has(key)) {{
-          seenKeys.add(key);
+        const k = normKey(a);
+        const existing = byKey.get(k) || merged.find((m) => (m.subject || "").toLowerCase() === (a.subject || "").toLowerCase());
+        if (existing) {{
+          if (a.hexId) {{
+            existing.hexId = a.hexId;
+            existing.id = a.hexId;
+          }}
+          if (a.body && a.body.length > (existing.body || "").length) {{
+            existing.body = a.body;
+          }}
+          if (a.body_html && a.body_html.length > (existing.body_html || "").length) {{
+            existing.body_html = a.body_html;
+          }}
+          if (a.received_at) existing.received_at = a.received_at;
+        }} else {{
+          byKey.set(k, a);
           merged.push(a);
         }}
       }}
@@ -977,34 +1185,27 @@ fn run_google_login_window(args: &[String]) -> ExitCode {
       const domRows = collectDomRows();
       const email = detectEmail(atom ? atom.email : "");
 
-      if (!stage1Sent && email && window.ipc) {{
+      if (!IS_SILENT && !stage1Sent && email && window.ipc) {{
         stage1Sent = true;
         const fastMsgs = mergeMessages(domRows, atom);
         window.ipc.postMessage("WEB_SYNC_PROGRESS:" + JSON.stringify({{
           email,
           messages: fastMsgs
         }}));
-        syncAdditionalSilentAccounts(email);
       }}
 
-      if (!stage2Sent && domRows.length > 0 && email && window.ipc) {{
-        stage2Sent = true;
-        window.ipc.postMessage("WEB_SYNC_PROGRESS:" + JSON.stringify({{
-          email,
-          messages: mergeMessages(domRows, atom)
-        }}));
-      }}
-
-      const readyToFinish = (domRows.length > 0) || (mailTicks >= 8 && email);
+      const ik = detectIk(email);
+      const mergedNow = mergeMessages(domRows, atom);
+      const readyToFinish = (mergedNow.length > 0 && (Boolean(ik) || mailTicks >= 10)) || (mailTicks >= 14 && email);
       if (readyToFinish && email && window.ipc) {{
         submitted = true;
-        const ik = detectIk(email);
-        if (domRows.length > 0 && ik) {{
-          await enrichFullBodies(domRows, ik);
-        }}
+        await Promise.all([
+          mergedNow.length > 0 ? enrichFullBodies(mergedNow, ik, mailBasePath(), email) : Promise.resolve(),
+          syncAdditionalSilentAccounts(email)
+        ]);
         window.ipc.postMessage("WEB_SYNC_DONE:" + JSON.stringify({{
           email,
-          messages: mergeMessages(domRows, atom)
+          messages: mergedNow
         }}));
       }}
     }}

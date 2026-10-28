@@ -65,6 +65,17 @@ pub fn process_new_item(
     policy: &TierRuntimePolicy,
     secrets: &SecretStore,
 ) -> Result<PipelineResult, String> {
+    if let Some(prev_ts) = store.get_existing_received_at(
+        item.source,
+        &item.account,
+        &item.external_id,
+        &item.subject,
+    ) && prev_ts > 0
+        && prev_ts < item.received_at
+    {
+        item.received_at = prev_ts;
+    }
+
     // 1. FAST PATH: immediate OTP detection without waiting for classification or AI.
     let blocked_patterns = store
         .list_not_a_code_patterns(&item.sender_domain)
@@ -73,9 +84,7 @@ pub fn process_new_item(
     let mut fast_popup: Option<OtpPopupEvent> = None;
     if let Some((extracted_code, popup)) = detect_fast_path(&item, now_epoch, &blocked_patterns) {
         item.extracted_codes.push(extracted_code);
-        if popup.expires_at > now_epoch {
-            fast_popup = Some(popup);
-        }
+        fast_popup = Some(popup);
     }
 
     // 2. BACKGROUND PATH: rule-based classification, phishing guard, entities, user rules.
@@ -137,11 +146,11 @@ pub fn process_new_item(
     if !stored_hidden && let Some(ref mut popup) = fast_popup {
         popup.item_id = item_id;
         popup.code_hash = OtpPopupEvent::compute_dedup_hash(
-            &format!("{}:{}", item.account, item.external_id),
+            &format!("{}:{}", item.account, item.subject),
             &popup.code,
         );
         let is_new = store.record_recent_code(popup)?;
-        if is_new && policy.tray_enabled {
+        if is_new && popup.expires_at > now_epoch && policy.tray_enabled {
             let _ = emit_os_otp_notification(popup);
         }
     }
@@ -346,7 +355,7 @@ pub fn sync_accounts_concurrent(
             std::sync::atomic::AtomicI64::new(0);
         let now_s = now_epoch();
         let prev_s = LAST_GWEB_SPAWN_SEC.load(std::sync::atomic::Ordering::Relaxed);
-        if now_s - prev_s >= 6 {
+        if now_s - prev_s >= 2 {
             LAST_GWEB_SPAWN_SEC.store(now_s, std::sync::atomic::Ordering::Relaxed);
             if let Ok(exe) = std::env::current_exe() {
                 let joined = google_emails.join(",");
@@ -575,7 +584,8 @@ pub fn handle_http_connection(
             &mut stream,
             200,
             "text/html; charset=utf-8",
-            OTP_OVERLAY_HTML,
+            &std::fs::read_to_string("crates/ui-web/src/otp_overlay.html")
+                .unwrap_or_else(|_| OTP_OVERLAY_HTML.to_string()),
         ),
         ("GET", "/") => write_http_response(
             &mut stream,
@@ -616,7 +626,12 @@ pub fn handle_http_connection(
                     limit: 500,
                     ..Default::default()
                 })
-                .map(|v| v.len())
+                .map(|v| {
+                    v.iter()
+                        .fold(v.len(), |acc, it| {
+                            acc.wrapping_add(it.body_html.len()).wrapping_add(it.body_text.len())
+                        })
+                })
                 .unwrap_or(0);
             let mut missing_secret_accounts = Vec::new();
             for a in &accounts {
@@ -975,58 +990,80 @@ pub fn handle_http_connection(
                         .filter(|s| !s.trim().is_empty())
                         .map(|s| s.trim().to_string())
                         .unwrap_or_else(|| format!("gweb-{now}-{idx}"));
-                    let sender = msg
-                        .get("sender")
-                        .and_then(|x| x.as_str())
-                        .filter(|s| !s.trim().is_empty())
-                        .unwrap_or("Gmail")
-                        .trim()
-                        .to_string();
-                    let subject = msg
-                        .get("subject")
-                        .and_then(|x| x.as_str())
-                        .filter(|s| !s.trim().is_empty())
-                        .unwrap_or("(Không có tiêu đề)")
-                        .trim()
-                        .to_string();
-                    let body = msg
-                        .get("body")
-                        .and_then(|x| x.as_str())
-                        .unwrap_or("")
-                        .trim()
-                        .to_string();
-                    let body_text = if body.is_empty() {
-                        subject.clone()
-                    } else {
-                        body
-                    };
+                    let unread = msg
+                        .get("unread")
+                        .and_then(|x| x.as_bool())
+                        .unwrap_or(true);
                     let received_at = msg
                         .get("received_at")
                         .and_then(|x| x.as_i64())
                         .filter(|&ts| ts > 946_684_800)
                         .unwrap_or_else(|| now - (idx as i64) * 60);
-                    let unread = msg
-                        .get("unread")
-                        .and_then(|x| x.as_bool())
-                        .unwrap_or(true);
 
-                    let body_html = msg
-                        .get("body_html")
+                    let mut item = if let Some(raw_mime) = msg
+                        .get("raw_mime")
                         .and_then(|x| x.as_str())
-                        .unwrap_or("")
-                        .trim()
-                        .to_string();
-
-                    let mut item = Item::new(
-                        SourceKind::Email,
-                        &email,
-                        ext_id,
-                        sender,
-                        subject,
-                        body_text,
-                        received_at,
-                    );
-                    item.body_html = body_html;
+                        .filter(|s| s.len() > 40)
+                    {
+                        let mut parsed = vortex_imap::mime::parse_raw_email(
+                            &email,
+                            &ext_id,
+                            raw_mime,
+                            Vec::new(),
+                            received_at,
+                        );
+                        parsed.external_id = ext_id;
+                        parsed
+                    } else {
+                        let sender = msg
+                            .get("sender")
+                            .and_then(|x| x.as_str())
+                            .filter(|s| !s.trim().is_empty())
+                            .unwrap_or("Gmail")
+                            .trim()
+                            .to_string();
+                        let subject = msg
+                            .get("subject")
+                            .and_then(|x| x.as_str())
+                            .filter(|s| !s.trim().is_empty())
+                            .unwrap_or("(Không có tiêu đề)")
+                            .trim()
+                            .to_string();
+                        let body = msg
+                            .get("body")
+                            .and_then(|x| x.as_str())
+                            .unwrap_or("")
+                            .trim()
+                            .to_string();
+                        let mut body_text = if body.is_empty() {
+                            subject.clone()
+                        } else {
+                            body
+                        };
+                        let body_html = msg
+                            .get("body_html")
+                            .and_then(|x| x.as_str())
+                            .unwrap_or("")
+                            .trim()
+                            .to_string();
+                        if !body_html.is_empty() {
+                            let from_html = vortex_imap::mime::html_to_plain_text(&body_html);
+                            if from_html.len() > body_text.len() {
+                                body_text = from_html;
+                            }
+                        }
+                        let mut it = Item::new(
+                            SourceKind::Email,
+                            &email,
+                            ext_id,
+                            sender,
+                            subject,
+                            body_text,
+                            received_at,
+                        );
+                        it.body_html = body_html;
+                        it
+                    };
                     if !unread {
                         item.state = vortex_core::model::ItemState::Read;
                     }
@@ -1137,6 +1174,13 @@ pub fn handle_http_connection(
             primary_per_account.extend(secondary_codes);
             let json = serde_json::to_string(&primary_per_account).map_err(|e| e.to_string())?;
             write_http_response(&mut stream, 200, "application/json", &json)
+        }
+        ("POST", "/api/codes/clear") => {
+            let guard = state
+                .lock()
+                .map_err(|_| "state lock poisoned".to_string())?;
+            let _ = guard.store.clear_recent_codes();
+            write_http_response(&mut stream, 200, "application/json", "{\"ok\":true}")
         }
         ("POST", "/api/actions") => {
             let v: serde_json::Value =

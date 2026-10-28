@@ -47,10 +47,22 @@ pub fn parse_raw_email(
     } else {
         sanitize_html_safe(&html_body)
     };
-    let effective_text = if !plain_body.trim().is_empty() {
-        strip_invisible_unicode(&plain_body)
+    let html_text = if sanitized_html.is_empty() {
+        String::new()
     } else {
         html_to_plain_text(&sanitized_html)
+    };
+    let plain_clean = strip_invisible_unicode(&plain_body);
+    let effective_text = if plain_clean.trim().is_empty()
+        || (!html_text.is_empty() && html_text.len() > plain_clean.trim().len() + 32)
+    {
+        if html_text.is_empty() {
+            plain_clean
+        } else {
+            html_text
+        }
+    } else {
+        plain_clean
     };
 
     let mut links = extract_links_from_text(&effective_text);
@@ -151,10 +163,10 @@ fn extract_mime_bodies(
             let p_ct = find_header(&hdrs, "content-type").unwrap_or("text/plain");
             let p_enc = find_header(&hdrs, "content-transfer-encoding").unwrap_or("7bit");
             let (sub_plain, sub_html) = extract_mime_bodies(part_body.trim_end(), p_ct, p_enc);
-            if !sub_plain.is_empty() && plain.is_empty() {
+            if sub_plain.trim().len() > plain.trim().len() {
                 plain = sub_plain;
             }
-            if !sub_html.is_empty() && html.is_empty() {
+            if sub_html.trim().len() > html.trim().len() {
                 html = sub_html;
             }
         }
@@ -162,7 +174,12 @@ fn extract_mime_bodies(
     }
 
     let decoded = decode_transfer_encoding(body, transfer_encoding);
-    if ct_lower.contains("text/html") {
+    let trimmed_dec = decoded.trim_start();
+    if ct_lower.contains("text/html")
+        || trimmed_dec.starts_with("<!DOCTYPE")
+        || trimmed_dec.starts_with("<!doctype")
+        || trimmed_dec.starts_with("<html")
+    {
         (String::new(), decoded)
     } else {
         (decoded, String::new())
@@ -329,25 +346,62 @@ fn strip_hidden_elements(html: &str) -> String {
 
         let is_hidden = compact.contains("display:none")
             || compact.contains("visibility:hidden")
-            || compact.contains("opacity:0")
-            || compact.contains("font-size:0")
-            || compact.contains("color:#fff;")
-            || compact.contains("color:#ffffff")
-            || compact.contains("color:white")
-            || compact.contains("rgb(255,255,255)");
+            || compact.contains("opacity:0;")
+            || compact.contains("opacity:0\"")
+            || compact.contains("opacity:0'")
+            || compact.contains("font-size:0px")
+            || compact.contains("font-size:0;")
+            || compact.contains("font-size:0\"")
+            || compact.contains("font-size:0'");
 
-        if is_hidden {
+        if is_hidden && !compact.ends_with("/>") {
             let tag_name = tag
-                .split_whitespace()
+                .split(|c: char| c.is_whitespace() || c == '/' || c == '>')
                 .next()
                 .unwrap_or("")
-                .trim_start_matches('/')
                 .to_ascii_lowercase();
-            let close_pat = format!("</{tag_name}>");
-            let remainder = &after_lt[gt + 1..];
-            if let Some(close_idx) = remainder.to_ascii_lowercase().find(&close_pat) {
-                rest = &remainder[close_idx + close_pat.len()..];
-                continue;
+            if !matches!(
+                tag_name.as_str(),
+                "" | "br" | "hr" | "img" | "meta" | "link" | "input" | "col" | "area" | "base"
+            ) {
+                let open_pat = format!("<{tag_name}");
+                let close_pat = format!("</{tag_name}");
+                let remainder = &after_lt[gt + 1..];
+                let lower_rem = remainder.to_ascii_lowercase();
+                let mut depth = 1usize;
+                let mut cursor = 0usize;
+                let mut close_end = None;
+                while cursor < lower_rem.len() {
+                    let next_open = lower_rem[cursor..].find(&open_pat).map(|i| cursor + i);
+                    let next_close = lower_rem[cursor..].find(&close_pat).map(|i| cursor + i);
+                    match (next_open, next_close) {
+                        (Some(o), Some(c)) if o < c => {
+                            let after_char = lower_rem.as_bytes().get(o + open_pat.len()).copied();
+                            if matches!(after_char, Some(b' ' | b'>' | b'/' | b'\t' | b'\n' | b'\r')) {
+                                depth += 1;
+                            }
+                            cursor = o + open_pat.len();
+                        }
+                        (_, Some(c)) => {
+                            let after_char = lower_rem.as_bytes().get(c + close_pat.len()).copied();
+                            if matches!(after_char, Some(b' ' | b'>' | b'\t' | b'\n' | b'\r')) {
+                                depth -= 1;
+                                if depth == 0 {
+                                    if let Some(end_gt) = lower_rem[c..].find('>') {
+                                        close_end = Some(c + end_gt + 1);
+                                    }
+                                    break;
+                                }
+                            }
+                            cursor = c + close_pat.len();
+                        }
+                        _ => break,
+                    }
+                }
+                if let Some(skip_to) = close_end {
+                    rest = &remainder[skip_to..];
+                    continue;
+                }
             }
         }
         out.push('<');
@@ -399,6 +453,18 @@ pub fn html_to_plain_text(html: &str) -> String {
         .replace("&gt;", ">")
         .replace("&quot;", "\"");
     replaced.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+pub fn plain_text_to_html(text: &str) -> String {
+    let escaped = text
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;");
+    format!(
+        "<div style=\"white-space:pre-wrap;line-height:1.65;\">{}</div>",
+        escaped
+    )
 }
 
 pub fn strip_invisible_unicode(input: &str) -> String {
@@ -482,5 +548,14 @@ mod tests {
             parse_raw_email("account", "1", &invalid, vec![], 1_700_001_000).received_at,
             1_700_001_000
         );
+    }
+
+    #[test]
+    fn preserves_full_html_with_nested_hidden_preheader_and_white_buttons() {
+        let html = r#"<div style="display:none"><span>Preheader snippet</span></div><div style="background:#ffffff"><p>Mới đăng nhập trên Windows noname.dt500@gmail.com Chúng tôi phát hiện thấy có một yêu cầu đăng nhập mới vào Tài khoản Google của bạn trên một thiết bị Windows. Nếu đây là yêu cầu của bạn, thì bạn không cần làm gì thêm. Nếu không phải, hãy kiểm tra hoạt động ngay.</p><a href="https://myaccount.google.com/notifications" style="color:#ffffff;background:#1a73e8">Kiểm tra hoạt động</a></div>"#;
+        let clean = sanitize_html_safe(html);
+        assert!(!clean.contains("Preheader snippet"));
+        assert!(clean.contains("thì bạn không cần làm gì thêm"));
+        assert!(clean.contains("Kiểm tra hoạt động"));
     }
 }
