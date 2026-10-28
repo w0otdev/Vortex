@@ -1568,31 +1568,19 @@ pub const APP_JS: &str = r##"(() => {
   function createSenderAvatar(rawSender) {
     const avatar = document.createElement("span");
     avatar.className = "sender-avatar";
-    const name = cleanSenderName(rawSender);
-    const email = cleanSenderEmail(rawSender);
+    const name = cleanSenderName(rawSender), email = cleanSenderEmail(rawSender);
     const domain = (email.split("@")[1] || "").toLowerCase();
     const initial = ((name || email || "V").trim().charAt(0) || "V").toUpperCase();
-
-    let primaryUrl = "";
-    let secondaryUrl = "";
-
+    let primaryUrl = "", secondaryUrl = "";
     if (domain === "github.com" || domain.endsWith(".github.com")) {
       const cleanHandle = name.replace(/\[bot\]$/i, "").trim();
-      if (cleanHandle.toLowerCase() === "github" || email.startsWith("noreply@")) {
-        primaryUrl = "https://github.com/github.png?size=64";
-      } else if (/^[a-zA-Z0-9-]+$/.test(cleanHandle)) {
-        primaryUrl = `https://github.com/${encodeURIComponent(cleanHandle)}.png?size=64`;
-        secondaryUrl = "https://github.com/github.png?size=64";
-      } else {
-        primaryUrl = "https://github.com/github.png?size=64";
-      }
+      if (cleanHandle.toLowerCase() === "github" || email.startsWith("noreply@")) primaryUrl = "https://github.com/github.png?size=64";
+      else if (/^[a-zA-Z0-9-]+$/.test(cleanHandle)) { primaryUrl = `https://github.com/${encodeURIComponent(cleanHandle)}.png?size=64`; secondaryUrl = "https://github.com/github.png?size=64"; }
+      else primaryUrl = "https://github.com/github.png?size=64";
     } else if (domain && !/^(gmail\.com|googlemail\.com|outlook\.com|hotmail\.com|icloud\.com|yahoo\.com|live\.com)$/.test(domain)) {
       primaryUrl = `https://www.google.com/s2/favicons?domain=${encodeURIComponent(domain)}&sz=64`;
       secondaryUrl = `https://icons.duckduckgo.com/ip3/${encodeURIComponent(domain)}.ico`;
-    } else if (email) {
-      primaryUrl = `https://unavatar.io/${encodeURIComponent(email)}?fallback=false`;
-    }
-
+    } else if (email) primaryUrl = `https://unavatar.io/${encodeURIComponent(email)}?fallback=false`;
     const showInitial = () => {
       avatar.innerHTML = "";
       const initSpan = document.createElement("span");
@@ -1600,50 +1588,25 @@ pub const APP_JS: &str = r##"(() => {
       initSpan.textContent = initial;
       avatar.appendChild(initSpan);
     };
-
-    if (!primaryUrl) {
-      showInitial();
-      return avatar;
-    }
-
+    if (!primaryUrl) { showInitial(); return avatar; }
     const img = document.createElement("img");
-    img.className = "sender-avatar-img";
-    img.src = primaryUrl;
-    img.alt = name;
-    img.loading = "lazy";
-    img.onerror = () => {
-      if (secondaryUrl && img.src !== secondaryUrl) {
-        img.src = secondaryUrl;
-      } else {
-        showInitial();
-      }
-    };
+    img.className = "sender-avatar-img"; img.src = primaryUrl; img.alt = name; img.loading = "lazy";
+    img.onerror = () => { if (secondaryUrl && img.src !== secondaryUrl) img.src = secondaryUrl; else showInitial(); };
     avatar.appendChild(img);
     return avatar;
   }
-
   function renderStream(force = false) {
     const ul = $("streamList");
     const nextKey = items.map((i) => `${i.id}:${i.state}:${i.pinned ? 1 : 0}:${(i.subject || "").length}:${(i.body_text || "").length}:${(i.body_html || "").length}`).join("|");
-    if (!force && nextKey === lastStreamKey && ul.children.length > 0) {
-      updateStreamSelectionAttr();
-      return;
-    }
+    if (!force && nextKey === lastStreamKey && ul.children.length > 0) { updateStreamSelectionAttr(); return; }
     lastStreamKey = nextKey;
     ul.innerHTML = "";
     if (!items.length) {
-      const li = document.createElement("li");
-      li.className = "stream-empty";
+      const li = document.createElement("li"); li.className = "stream-empty";
       const icon = svgIcon("hi-inbox", "hi-icon-lg");
-      const title = document.createElement("div");
-      title.className = "stream-empty-title";
-      title.textContent = t("empty_no_items_title");
-      const desc = document.createElement("div");
-      desc.className = "stream-empty-desc";
-      desc.textContent = t("empty_no_items_desc");
-      li.append(icon, title, desc);
-      ul.appendChild(li);
-      return;
+      const title = document.createElement("div"); title.className = "stream-empty-title"; title.textContent = t("empty_no_items_title");
+      const desc = document.createElement("div"); desc.className = "stream-empty-desc"; desc.textContent = t("empty_no_items_desc");
+      li.append(icon, title, desc); ul.appendChild(li); return;
     }
     items.forEach((item, idx) => {
       const li = document.createElement("li");
@@ -1652,154 +1615,56 @@ pub const APP_JS: &str = r##"(() => {
       li.setAttribute("data-id", String(item.id));
       li.setAttribute("aria-selected", item.id === selectedId ? "true" : "false");
       li.tabIndex = 0;
-
-      const header = document.createElement("div");
-      header.className = "row-header";
-
+      const header = document.createElement("div"); header.className = "row-header";
       const avatar = createSenderAvatar(item.sender);
-
-      const info = document.createElement("div");
-      info.className = "sender-info";
-
-      const topLine = document.createElement("div");
-      topLine.className = "sender-top-line";
-
-      const senderNameSpan = document.createElement("span");
-      senderNameSpan.className = "row-sender-name";
+      const info = document.createElement("div"); info.className = "sender-info";
+      const topLine = document.createElement("div"); topLine.className = "sender-top-line";
+      const senderNameSpan = document.createElement("span"); senderNameSpan.className = "row-sender-name";
       senderNameSpan.textContent = (item.pinned ? "[Ghim] " : "") + cleanSenderName(item.sender);
-
-      const timeStr = new Date(item.received_at * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-      const timeEl = document.createElement("span");
-      timeEl.className = "row-time";
-      timeEl.textContent = timeStr;
+      const timeEl = document.createElement("span"); timeEl.className = "row-time";
+      timeEl.textContent = new Date(item.received_at * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
       topLine.append(senderNameSpan, timeEl);
-
-      const emailLine = document.createElement("div");
-      emailLine.className = "row-sender-email";
+      const emailLine = document.createElement("div"); emailLine.className = "row-sender-email";
       const sEmail = cleanSenderEmail(item.sender);
-      emailLine.textContent = (!activeAccount && item.account && sEmail && sEmail !== item.account)
-        ? `${sEmail} · ${item.account}`
-        : (sEmail || item.account || "");
-
-      info.append(topLine, emailLine);
-      header.append(avatar, info);
-
-      const subj = document.createElement("div");
-      subj.className = "row-subject";
-      subj.textContent = item.subject || "(Không tiêu đề)";
-
-      const snip = document.createElement("div");
-      snip.className = "row-snippet";
-      const cleanedPreview = cleanBodyText(item.subject, item.summary || item.body_text || "");
-      snip.textContent = cleanedPreview.slice(0, 140);
-
+      emailLine.textContent = (!activeAccount && item.account && sEmail && sEmail !== item.account) ? `${sEmail} · ${item.account}` : (sEmail || item.account || "");
+      info.append(topLine, emailLine); header.append(avatar, info);
+      const subj = document.createElement("div"); subj.className = "row-subject"; subj.textContent = item.subject || "(Không tiêu đề)";
+      const snip = document.createElement("div"); snip.className = "row-snippet";
+      snip.textContent = cleanBodyText(item.subject, item.summary || item.body_text || "").slice(0, 140);
       li.append(header, subj, snip);
-      li.onclick = () => {
-        playCreamySfx("select");
-        selectItem(item.id, true);
-      };
-      li.onkeydown = (e) => {
-        if (e.key === "Enter") {
-          playCreamySfx("select");
-          selectItem(item.id, true);
-        }
-      };
+      li.onclick = () => { playCreamySfx("select"); selectItem(item.id, true); };
+      li.onkeydown = (e) => { if (e.key === "Enter") { playCreamySfx("select"); selectItem(item.id, true); } };
       ul.appendChild(li);
     });
   }
-
   function updateStreamSelectionAttr() {
     document.querySelectorAll("#streamList .stream-row").forEach((li) => {
-      const rowId = Number(li.getAttribute("data-id"));
-      li.setAttribute("aria-selected", rowId === selectedId ? "true" : "false");
+      li.setAttribute("aria-selected", Number(li.getAttribute("data-id")) === selectedId ? "true" : "false");
     });
   }
 
   function parseEmailColor(raw) {
     if (!raw) return null;
     const s = String(raw).trim().toLowerCase().replace(/\s*!important\s*$/i, "");
-    if (!s || s === "transparent" || s === "none" || s === "inherit" || s === "initial" || s === "unset" || s === "currentcolor") {
-      return null;
+    if (!s || /^(transparent|none|inherit|initial|unset|currentcolor)$/.test(s)) return null;
+    const named = { white:[255,255,255],black:[0,0,0],gray:[128,128,128],grey:[128,128,128],silver:[192,192,192],whitesmoke:[245,245,245],lightgray:[211,211,211],lightgrey:[211,211,211],darkgray:[169,169,169],darkgrey:[169,169,169],dimgray:[105,105,105],dimgrey:[105,105,105],gainsboro:[220,220,220],blue:[0,0,255],navy:[0,0,128],red:[255,0,0],green:[0,128,0] };
+    if (named[s]) return { r: named[s][0], g: named[s][1], b: named[s][2], a: 1 };
+    const hm = s.match(/^#([0-9a-f]{3,8})$/i);
+    if (hm) {
+      const h = hm[1];
+      if (h.length <= 4) return { r: parseInt(h[0]+h[0],16), g: parseInt(h[1]+h[1],16), b: parseInt(h[2]+h[2],16), a: h.length === 4 ? parseInt(h[3]+h[3],16)/255 : 1 };
+      if (h.length === 6 || h.length === 8) return { r: parseInt(h.slice(0,2),16), g: parseInt(h.slice(2,4),16), b: parseInt(h.slice(4,6),16), a: h.length === 8 ? parseInt(h.slice(6,8),16)/255 : 1 };
     }
-    const named = {
-      white: [255, 255, 255, 1], black: [0, 0, 0, 1], gray: [128, 128, 128, 1], grey: [128, 128, 128, 1],
-      silver: [192, 192, 192, 1], whitesmoke: [245, 245, 245, 1], lightgray: [211, 211, 211, 1],
-      lightgrey: [211, 211, 211, 1], darkgray: [169, 169, 169, 1], darkgrey: [169, 169, 169, 1],
-      dimgray: [105, 105, 105, 1], dimgrey: [105, 105, 105, 1], slategray: [112, 128, 144, 1],
-      slategrey: [112, 128, 144, 1], ivory: [255, 255, 240, 1], snow: [255, 250, 250, 1],
-      ghostwhite: [248, 248, 255, 1], aliceblue: [240, 248, 255, 1], floralwhite: [255, 250, 240, 1],
-      beige: [245, 245, 220, 1], linen: [250, 240, 230, 1], seashell: [255, 245, 238, 1],
-      oldlace: [253, 245, 230, 1], cornsilk: [255, 248, 220, 1], gainsboro: [220, 220, 220, 1],
-      blue: [0, 0, 255, 1], navy: [0, 0, 128, 1], darkblue: [0, 0, 139, 1], mediumblue: [0, 0, 205, 1],
-      royalblue: [65, 105, 225, 1], dodgerblue: [30, 144, 255, 1], cornflowerblue: [100, 149, 237, 1],
-      skyblue: [135, 206, 235, 1], lightblue: [173, 216, 230, 1], red: [255, 0, 0, 1],
-      darkred: [139, 0, 0, 1], crimson: [220, 20, 60, 1], firebrick: [178, 34, 34, 1],
-      green: [0, 128, 0, 1], darkgreen: [0, 100, 0, 1], forestgreen: [34, 139, 34, 1],
-      seagreen: [46, 139, 87, 1], teal: [0, 128, 128, 1], aqua: [0, 255, 255, 1], cyan: [0, 255, 255, 1],
-      yellow: [255, 255, 0, 1], gold: [255, 215, 0, 1], orange: [255, 165, 0, 1],
-      darkorange: [255, 140, 0, 1], purple: [128, 0, 128, 1], indigo: [75, 0, 130, 1],
-      violet: [238, 130, 238, 1], magenta: [255, 0, 255, 1], fuchsia: [255, 0, 255, 1],
-      maroon: [128, 0, 0, 1], brown: [165, 42, 42, 1], olive: [128, 128, 0, 1]
-    };
-    if (named[s]) {
-      const c = named[s];
-      return { r: c[0], g: c[1], b: c[2], a: c[3] };
-    }
-    const hexMatch = s.match(/^#([0-9a-f]{3,8})$/i);
-    if (hexMatch) {
-      const h = hexMatch[1];
-      if (h.length === 3 || h.length === 4) {
-        const r = parseInt(h[0] + h[0], 16);
-        const g = parseInt(h[1] + h[1], 16);
-        const b = parseInt(h[2] + h[2], 16);
-        const a = h.length === 4 ? parseInt(h[3] + h[3], 16) / 255 : 1;
-        return { r, g, b, a };
-      }
-      if (h.length === 6 || h.length === 8) {
-        const r = parseInt(h.slice(0, 2), 16);
-        const g = parseInt(h.slice(2, 4), 16);
-        const b = parseInt(h.slice(4, 6), 16);
-        const a = h.length === 8 ? parseInt(h.slice(6, 8), 16) / 255 : 1;
-        return { r, g, b, a };
-      }
-    }
-    const rgbMatch = s.match(/rgba?\(\s*([0-9.]+)\s*[, ]\s*([0-9.]+)\s*[, ]\s*([0-9.]+)(?:\s*[,/]\s*([0-9.]+%?))?\s*\)/i);
-    if (rgbMatch) {
-      const r = Math.min(255, Math.max(0, Math.round( parseFloat(rgbMatch[1]) )));
-      const g = Math.min(255, Math.max(0, Math.round( parseFloat(rgbMatch[2]) )));
-      const b = Math.min(255, Math.max(0, Math.round( parseFloat(rgbMatch[3]) )));
-      let a = 1;
-      if (rgbMatch[4] !== undefined) {
-        a = rgbMatch[4].endsWith("%") ? parseFloat(rgbMatch[4]) / 100 : parseFloat(rgbMatch[4]);
-        a = Math.min(1, Math.max(0, isNaN(a) ? 1 : a));
-      }
-      return { r, g, b, a };
+    const rm = s.match(/rgba?\(\s*([0-9.]+)\s*[, ]\s*([0-9.]+)\s*[, ]\s*([0-9.]+)(?:\s*[,/]\s*([0-9.]+%?))?\s*\)/i);
+    if (rm) {
+      let a = rm[4] !== undefined ? (rm[4].endsWith("%") ? parseFloat(rm[4])/100 : parseFloat(rm[4])) : 1;
+      return { r: Math.min(255,Math.max(0,Math.round(parseFloat(rm[1])))), g: Math.min(255,Math.max(0,Math.round(parseFloat(rm[2])))), b: Math.min(255,Math.max(0,Math.round(parseFloat(rm[3])))), a: Math.min(1,Math.max(0,isNaN(a)?1:a)) };
     }
     return null;
   }
-
-  function blendEmailColor(fg, bg) {
-    const a = fg.a !== undefined ? fg.a : 1;
-    return {
-      r: Math.round(fg.r * a + bg.r * (1 - a)),
-      g: Math.round(fg.g * a + bg.g * (1 - a)),
-      b: Math.round(fg.b * a + bg.b * (1 - a)),
-      a: 1
-    };
-  }
-
-  function emailRelLum(c) {
-    const chan = (v) => {
-      const x = v / 255;
-      return x <= 0.03928 ? x / 12.92 : Math.pow((x + 0.055) / 1.055, 2.4);
-    };
-    return 0.2126 * chan(c.r) + 0.7152 * chan(c.g) + 0.0722 * chan(c.b);
-  }
-
-  function emailContrast(l1, l2) {
-    return (Math.max(l1, l2) + 0.05) / (Math.min(l1, l2) + 0.05);
-  }
-
+  function blendEmailColor(fg, bg) { const a = fg.a !== undefined ? fg.a : 1; return { r: Math.round(fg.r * a + bg.r * (1 - a)), g: Math.round(fg.g * a + bg.g * (1 - a)), b: Math.round(fg.b * a + bg.b * (1 - a)), a: 1 }; }
+  function emailRelLum(c) { const ch = (v) => { const x = v / 255; return x <= 0.03928 ? x / 12.92 : Math.pow((x + 0.055) / 1.055, 2.4); }; return 0.2126 * ch(c.r) + 0.7152 * ch(c.g) + 0.0722 * ch(c.b); }
+  function emailContrast(l1, l2) { return (Math.max(l1, l2) + 0.05) / (Math.min(l1, l2) + 0.05); }
   function normalizeEmailDom(root, isDark) {
     if (!root) return;
     const baseBg = isDark ? { r: 27, g: 27, b: 25, a: 1 } : { r: 244, g: 244, b: 240, a: 1 };
@@ -1807,213 +1672,121 @@ pub const APP_JS: &str = r##"(() => {
     const altBgRgb = isDark ? { r: 37, g: 37, b: 34, a: 1 } : { r: 229, g: 229, b: 221, a: 1 };
     const fgHex = isDark ? "#ecece6" : "#181816";
     const fgMutedHex = isDark ? "#c8c8c0" : "#363632";
-    const linkDarkBg = "#6cb6ff";
-    const linkLightBg = "#0b57d0";
     const borderHex = isDark ? "#66665e" : "#85857c";
-
-    const allTables = Array.from(root.querySelectorAll("table"));
+    const isCellActive = (c) => ((c.textContent || "").trim().length > 0) || !!c.querySelector("img,svg,[role='img']");
     const tableCandidates = new Set();
-    const isCellActive = (c) =>
-      ((c.textContent || "").trim().length > 0) || !!c.querySelector("img,svg,[role='img']");
-
-    for (const tbl of allTables) {
+    for (const tbl of Array.from(root.querySelectorAll("table"))) {
       const rows = Array.from(tbl.rows || []);
       if (!rows.length) continue;
-      let multiColRows = 0;
-      let hasTh = false;
-      let wrappedMultiColRows = 0;
+      let multiColRows = 0, hasTh = false, wrappedRows = 0;
       for (const r of rows) {
         const cells = Array.from(r.cells || []);
         if (cells.some((c) => c.tagName === "TH")) hasTh = true;
-        const active = cells.filter(isCellActive);
-        if (active.length >= 2) {
-          multiColRows++;
-        } else if (cells.length === 1) {
-          const innerTbl = cells[0].querySelector(":scope > table");
-          if (innerTbl && innerTbl.rows && innerTbl.rows.length === 1) {
-            const innerActive = Array.from(innerTbl.rows[0].cells || []).filter(isCellActive);
-            if (innerActive.length >= 2) wrappedMultiColRows++;
-          }
+        if (cells.filter(isCellActive).length >= 2) multiColRows++;
+        else if (cells.length === 1) {
+          const it = cells[0].querySelector(":scope > table");
+          if (it && it.rows && it.rows.length === 1 && Array.from(it.rows[0].cells || []).filter(isCellActive).length >= 2) wrappedRows++;
         }
       }
       const bAttr = tbl.getAttribute("border");
-      if (hasTh || multiColRows >= 2 || wrappedMultiColRows >= 2 || (bAttr && bAttr !== "0")) {
-        tableCandidates.add(tbl);
-      }
+      if (hasTh || multiColRows >= 2 || wrappedRows >= 2 || (bAttr && bAttr !== "0")) tableCandidates.add(tbl);
     }
-
     for (const tbl of Array.from(tableCandidates)) {
-      const nestedCandidates = Array.from(tbl.querySelectorAll("table")).filter((sub) => tableCandidates.has(sub));
-      if (nestedCandidates.length > 0) {
-        tableCandidates.delete(tbl);
-      }
+      if (Array.from(tbl.querySelectorAll("table")).some((sub) => tableCandidates.has(sub))) tableCandidates.delete(tbl);
     }
-
-    root.querySelectorAll("td,div,section,article,center,body").forEach((container) => {
-      const directTables = Array.from(container.children || []).filter((ch) => ch.tagName === "TABLE");
-      if (directTables.length >= 2) {
-        const multiRowSibs = directTables.filter((t) => {
-          const r0 = t.rows && t.rows[0];
-          return t.rows && t.rows.length === 1 && r0 && Array.from(r0.cells || []).filter(isCellActive).length >= 2;
-        });
-        if (multiRowSibs.length >= 2) {
-          multiRowSibs.forEach((t, idx) => {
-            t.classList.add("vortex-data-table", "vortex-stacked-table");
-            const r0 = t.rows[0];
-            r0.classList.add("vortex-data-row");
-            const cells = Array.from(r0.cells || []);
-            const isHead = idx === 0 && cells.every((c) => (c.textContent || "").trim().length <= 32 && !c.querySelector("a,img"));
-            cells.forEach((c) => {
-              c.classList.add("vortex-data-cell");
-              if (isHead || c.tagName === "TH") c.classList.add("vortex-data-head-cell");
-            });
-          });
-        }
-      }
-    });
-
-    for (const tbl of tableCandidates) {
+    const markTableRows = (tbl, rows, forceIdx0Head) => {
       tbl.classList.add("vortex-data-table");
-      const rows = Array.from(tbl.rows || []);
+      let p = tbl.parentElement;
+      while (p && p !== root) {
+        if ((p.getAttribute("style") && /border/i.test(p.getAttribute("style"))) || p.hasAttribute("border")) {
+          p.removeAttribute("border");
+          p.style.setProperty("border", "0", "important");
+          p.style.setProperty("padding", "0", "important");
+        }
+        p = p.parentElement;
+      }
       rows.forEach((r, rIdx) => {
         r.classList.add("vortex-data-row");
         let cells = Array.from(r.cells || []);
         if (cells.length === 1) {
-          const innerTbl = cells[0].querySelector(":scope > table");
-          if (innerTbl && innerTbl.rows && innerTbl.rows.length === 1) {
-            const innerCells = Array.from(innerTbl.rows[0].cells || []);
-            if (innerCells.filter(isCellActive).length >= 2) {
-              innerTbl.style.setProperty("width", "100%", "important");
-              innerTbl.style.setProperty("border-collapse", "collapse", "important");
-              cells = innerCells;
-            }
+          const it = cells[0].querySelector(":scope > table");
+          if (it && it.rows && it.rows.length === 1 && Array.from(it.rows[0].cells || []).filter(isCellActive).length >= 2) {
+            it.style.setProperty("width", "100%", "important");
+            it.style.setProperty("border-collapse", "collapse", "important");
+            cells = Array.from(it.rows[0].cells || []);
           }
         }
-        const isHead =
-          rIdx === 0 &&
-          rows.length >= 2 &&
-          (cells.some((c) => c.tagName === "TH") ||
-            cells.every((c) => (c.textContent || "").trim().length <= 32 && !c.querySelector("a,img")));
-        cells.forEach((c) => {
-          c.classList.add("vortex-data-cell");
-          if (isHead || c.tagName === "TH") c.classList.add("vortex-data-head-cell");
-        });
+        const isHead = (forceIdx0Head || (rIdx === 0 && rows.length >= 2)) && (cells.some((c) => c.tagName === "TH") || cells.every((c) => (c.textContent || "").trim().length <= 32 && !c.querySelector("a,img")));
+        cells.forEach((c) => { c.classList.add("vortex-data-cell"); if (isHead || c.tagName === "TH") c.classList.add("vortex-data-head-cell"); });
       });
-    }
-
+    };
+    root.querySelectorAll("td,div,section,article,center,body").forEach((box) => {
+      const sibs = Array.from(box.children || []).filter((t) => t.tagName === "TABLE" && t.rows && t.rows.length === 1 && Array.from(t.rows[0].cells || []).filter(isCellActive).length >= 2);
+      if (sibs.length >= 2) sibs.forEach((t, idx) => { t.classList.add("vortex-stacked-table"); markTableRows(t, [t.rows[0]], idx === 0); });
+    });
+    tableCandidates.forEach((tbl) => markTableRows(tbl, Array.from(tbl.rows || []), false));
     const walk = (el, parentBg, insideLink) => {
       if (!el || el.nodeType !== 1) return;
       const tag = el.tagName;
       let currentBg = parentBg;
       const rawStyle = el.getAttribute("style") || "";
-      const bgAttr = el.getAttribute("bgcolor");
-      const inlineBg = (el.style && el.style.backgroundColor) || bgAttr || "";
-      const parsedBg = parseEmailColor(inlineBg);
-
+      const parsedBg = parseEmailColor((el.style && el.style.backgroundColor) || el.getAttribute("bgcolor") || "");
       if (parsedBg && parsedBg.a > 0.05) {
         const blendedBg = blendEmailColor(parsedBg, parentBg);
         const bgLum = emailRelLum(blendedBg);
         const bgChroma = Math.max(blendedBg.r, blendedBg.g, blendedBg.b) - Math.min(blendedBg.r, blendedBg.g, blendedBg.b);
         if (isDark && bgLum > 0.32 && bgChroma <= 48) {
           el.removeAttribute("bgcolor");
-          if (bgLum > 0.86) {
-            el.style.setProperty("background-color", "#1b1b19", "important");
-            currentBg = baseBg;
-          } else {
-            el.style.setProperty("background-color", altBgHex, "important");
-            currentBg = altBgRgb;
-          }
-        } else if (
-          !isDark &&
-          bgLum < 0.16 &&
-          bgChroma <= 40 &&
-          /^(TABLE|TBODY|THEAD|TR|TD|TH|DIV|SECTION|ARTICLE|CENTER|BODY)$/.test(tag)
-        ) {
+          el.style.setProperty("background-color", bgLum > 0.86 ? "#1b1b19" : altBgHex, "important");
+          currentBg = bgLum > 0.86 ? baseBg : altBgRgb;
+        } else if (!isDark && bgLum < 0.16 && bgChroma <= 40 && /^(TABLE|TBODY|THEAD|TR|TD|TH|DIV|SECTION|ARTICLE|CENTER|BODY)$/.test(tag)) {
           el.removeAttribute("bgcolor");
           el.style.setProperty("background-color", "#f4f4f0", "important");
           currentBg = baseBg;
-        } else {
-          currentBg = blendedBg;
-        }
+        } else currentBg = blendedBg;
       }
-
       if (rawStyle && /border/i.test(rawStyle)) {
         const bgLum = emailRelLum(currentBg);
         ["", "Top", "Right", "Bottom", "Left"].forEach((side) => {
-          const propColor = "border" + side + "Color";
-          const cssProp = "border-" + (side ? side.toLowerCase() + "-" : "") + "color";
-          const val = el.style[propColor];
+          const val = el.style["border" + side + "Color"];
           if (val) {
             const bc = parseEmailColor(val);
-            if (!bc || emailContrast(emailRelLum(blendEmailColor(bc, currentBg)), bgLum) < 2.5) {
-              el.style.setProperty(cssProp, borderHex, "important");
-            }
+            if (!bc || emailContrast(emailRelLum(blendEmailColor(bc, currentBg)), bgLum) < 2.5) el.style.setProperty("border-" + (side ? side.toLowerCase() + "-" : "") + "color", borderHex, "important");
           }
         });
-        if (tag === "TR" && el.parentElement) {
-          const pTbl = el.closest("table");
-          if (pTbl) pTbl.style.setProperty("border-collapse", "collapse", "important");
-        }
+        if (tag === "TR") { const pTbl = el.closest("table"); if (pTbl) pTbl.style.setProperty("border-collapse", "collapse", "important"); }
       }
-      if (el.hasAttribute("bordercolor")) {
-        el.removeAttribute("bordercolor");
-        el.style.setProperty("border-color", borderHex, "important");
-      }
-
+      if (el.hasAttribute("bordercolor")) { el.removeAttribute("bordercolor"); el.style.setProperty("border-color", borderHex, "important"); }
       const bgLum = emailRelLum(currentBg);
       const bgChroma = Math.max(currentBg.r, currentBg.g, currentBg.b) - Math.min(currentBg.r, currentBg.g, currentBg.b);
       const isLink = tag === "A" || insideLink;
       const colorAttr = el.getAttribute("color");
-      const rawFg = (el.style && el.style.color) || colorAttr || "";
+      const parsedFg = parseEmailColor((el.style && el.style.color) || colorAttr || "");
       if (colorAttr) el.removeAttribute("color");
-      const parsedFg = parseEmailColor(rawFg);
-
       if (isLink) {
         if (bgChroma > 48) {
-          if (parsedFg) {
-            const fgLum = emailRelLum(blendEmailColor(parsedFg, currentBg));
-            if (emailContrast(fgLum, bgLum) < 3.8) {
-              el.style.setProperty("color", bgLum < 0.48 ? "#ffffff" : "#181816", "important");
-            }
-          } else if (tag === "A") {
-            el.style.setProperty("color", bgLum < 0.48 ? "#ffffff" : "#181816", "important");
-          }
+          if (parsedFg) { if (emailContrast(emailRelLum(blendEmailColor(parsedFg, currentBg)), bgLum) < 3.8) el.style.setProperty("color", bgLum < 0.48 ? "#fafaf5" : "#181816", "important"); }
+          else if (tag === "A") el.style.setProperty("color", bgLum < 0.48 ? "#fafaf5" : "#181816", "important");
         } else {
-          const targetLinkHex = bgLum < 0.5 ? linkDarkBg : linkLightBg;
-          if (!parsedFg) {
-            if (tag === "A") {
-              el.style.setProperty("color", targetLinkHex, "important");
-            }
-          } else {
+          const targetLinkHex = bgLum < 0.5 ? "#6cb6ff" : "#0b57d0";
+          if (!parsedFg) { if (tag === "A") el.style.setProperty("color", targetLinkHex, "important"); }
+          else {
             const fgBlended = blendEmailColor(parsedFg, currentBg);
-            const fgLum = emailRelLum(fgBlended);
             const fgChroma = Math.max(fgBlended.r, fgBlended.g, fgBlended.b) - Math.min(fgBlended.r, fgBlended.g, fgBlended.b);
-            if (emailContrast(fgLum, bgLum) < 4.8 || fgChroma < 25) {
-              el.style.setProperty("color", targetLinkHex, "important");
-            }
+            if (emailContrast(emailRelLum(fgBlended), bgLum) < 4.8 || fgChroma < 25) el.style.setProperty("color", targetLinkHex, "important");
           }
         }
       } else if (parsedFg) {
         const fgBlended = blendEmailColor(parsedFg, currentBg);
-        const fgLum = emailRelLum(fgBlended);
-        if (emailContrast(fgLum, bgLum) < 4.8) {
+        if (emailContrast(emailRelLum(fgBlended), bgLum) < 4.8) {
           const isMuted = parsedFg.a < 0.72 || (emailRelLum(parsedFg) > 0.16 && emailRelLum(parsedFg) < 0.58);
-          if (bgLum < 0.5) {
-            el.style.setProperty("color", isMuted ? fgMutedHex : fgHex, "important");
-          } else {
-            el.style.setProperty("color", isMuted ? fgMutedHex : fgHex, "important");
-          }
+          el.style.setProperty("color", isMuted ? fgMutedHex : fgHex, "important");
         }
       } else if ((isDark && bgLum >= 0.5) || (!isDark && bgLum < 0.5)) {
         el.style.setProperty("color", bgLum < 0.5 ? "#ecece6" : "#181816", "important");
       }
-
-      const children = el.children;
-      for (let i = 0; i < children.length; i++) {
-        walk(children[i], currentBg, isLink);
-      }
+      for (let i = 0; i < el.children.length; i++) walk(el.children[i], currentBg, isLink);
     };
-
     walk(root, baseBg, false);
   }
 
@@ -2066,63 +1839,21 @@ pub const APP_JS: &str = r##"(() => {
       *::-webkit-scrollbar-track { background: transparent; margin-block: 6px; }
       *::-webkit-scrollbar-thumb { background-color: ${sbThumb}; border-radius: 999px; border: 2px solid transparent; background-clip: padding-box; min-height: 36px; }
       *::-webkit-scrollbar-thumb:hover { background-color: ${sbHover}; }
-      *::-webkit-scrollbar-thumb:active {
-        background-color: ${sbActive};
-      }
-      html, body {
-        margin: 0;
-        padding: 12px 6px 28px 4px;
-        max-width: 100%;
-        overflow-x: hidden !important;
-        font-family: "Vortex SF Pro", -apple-system, system-ui, "Segoe UI", Roboto, sans-serif;
-        font-weight: 700;
-        font-size: 15px;
-        line-height: 1.6;
-        color: ${fgHex};
-        background-color: ${bgHex};
-        overflow-wrap: break-word;
-      }
+      *::-webkit-scrollbar-thumb:active { background-color: ${sbActive}; }
+      html, body { margin: 0; padding: 12px 6px 28px 4px; max-width: 100%; overflow-x: hidden !important; font-family: "Vortex SF Pro", -apple-system, system-ui, "Segoe UI", Roboto, sans-serif; font-weight: 700; font-size: 15px; line-height: 1.6; color: ${fgHex}; background-color: ${bgHex}; overflow-wrap: break-word; }
       ${bodyAnimRule}
       .blocked-image { display: none !important; }
       img { max-width: 100% !important; height: auto !important; }
       a { color: ${linkHex}; text-decoration: underline; text-underline-offset: 2px; overflow-wrap: break-word; }
       table { border-collapse: collapse; border-spacing: 0; }
       table, tbody, tr, td, th, div, section, article, center { max-width: 100% !important; }
-      table.vortex-data-table {
-        width: 100% !important;
-        border-collapse: collapse !important;
-        border-spacing: 0 !important;
-        border: 1.5px solid ${borderStrongHex} !important;
-        margin: 8px 0 !important;
-      }
-      table.vortex-stacked-table + table.vortex-stacked-table {
-        margin-top: -1.5px !important;
-      }
-      .vortex-data-row {
-        border-bottom: 1px solid ${borderHex} !important;
-      }
-      .vortex-data-cell {
-        border: 1px solid ${borderHex} !important;
-        padding: 9px 12px !important;
-        vertical-align: middle !important;
-      }
-      .vortex-data-head-cell, th {
-        background-color: ${surfaceAltHex} !important;
-        border: 1px solid ${borderHex} !important;
-        border-bottom: 1.5px solid ${borderStrongHex} !important;
-        padding: 9px 12px !important;
-      }
-      hr {
-        border: 0 !important;
-        border-top: 1.5px solid ${borderHex} !important;
-        margin: 12px 0 !important;
-        opacity: 1 !important;
-      }
-      blockquote {
-        border-left: 3px solid ${borderStrongHex} !important;
-        margin: 8px 0 !important;
-        padding-left: 12px !important;
-      }
+      table.vortex-data-table { width: 100% !important; border-collapse: collapse !important; border-spacing: 0 !important; border: 1.5px solid ${borderStrongHex} !important; margin: 8px 0 !important; }
+      table.vortex-stacked-table + table.vortex-stacked-table { margin-top: -1.5px !important; }
+      .vortex-data-row { border-bottom: 1px solid ${borderHex} !important; }
+      .vortex-data-cell { border: 1px solid ${borderHex} !important; padding: 9px 12px !important; vertical-align: middle !important; }
+      .vortex-data-head-cell, th { background-color: ${surfaceAltHex} !important; border: 1px solid ${borderHex} !important; border-bottom: 1.5px solid ${borderStrongHex} !important; padding: 9px 12px !important; }
+      hr { border: 0 !important; border-top: 1.5px solid ${borderHex} !important; margin: 12px 0 !important; opacity: 1 !important; }
+      blockquote { border-left: 3px solid ${borderStrongHex} !important; margin: 8px 0 !important; padding-left: 12px !important; }
       body * { font-family: "Vortex SF Pro", -apple-system, system-ui, "Segoe UI", Roboto, sans-serif !important; font-weight: 700 !important; }
       pre, code { white-space: pre-wrap !important; overflow-x: hidden !important; word-break: break-word; }
     </style></head><body>${bodyContent}</body></html>`;
