@@ -1,0 +1,97 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Unit and integration tests
+        run: cargo test --workspace
+      - name: Audit crate sizes with cargo-bloat
+        run: |
+          cargo install cargo-bloat --locked
+          cargo bloat --release -p vortex-cli -n 20
+
+  build-matrix:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            bin: vortex.exe
+            can_run: true
+          - target: aarch64-pc-windows-msvc
+            os: windows-latest
+            bin: vortex.exe
+            can_run: false
+          - target: x86_64-unknown-linux-musl
+            os: ubuntu-latest
+            bin: vortex
+            can_run: true
+          - target: aarch64-unknown-linux-musl
+            os: ubuntu-latest
+            bin: vortex
+            can_run: false
+          - target: armv7-unknown-linux-musleabihf
+            os: ubuntu-latest
+            bin: vortex
+            can_run: false
+          - target: x86_64-apple-darwin
+            os: macos-13
+            bin: vortex
+            can_run: true
+          - target: aarch64-apple-darwin
+            os: macos-14
+            bin: vortex
+            can_run: true
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: Install Linux musl cross toolchains
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools gcc-aarch64-linux-gnu gcc-arm-linux-gnueabihf
+      - name: Build release binary
+        run: cargo build --release --target ${{ matrix.target }} -p vortex-cli
+      - name: Check binary size gate (all targets <= 6 MB)
+        shell: bash
+        run: |
+          BIN="target/${{ matrix.target }}/release/${{ matrix.bin }}"
+          BYTES=$(wc -c < "$BIN" | tr -d ' ')
+          echo "Target ${{ matrix.target }} binary size: ${BYTES} bytes"
+          if [ "$BYTES" -gt 6291456 ]; then
+            echo "Binary exceeds 6 MB LITE budget" >&2
+            exit 1
+          fi
+      - name: Measure idle RSS and tier budgets (native targets)
+        if: matrix.can_run && runner.os != 'Windows'
+        run: sh scripts/check-budgets.sh "target/${{ matrix.target }}/release/${{ matrix.bin }}"
+      - name: Measure idle RSS and tier budgets (Windows native)
+        if: matrix.can_run && runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/check-budgets.ps1 -BinaryPath "target/${{ matrix.target }}/release/${{ matrix.bin }}"
+      - name: Upload release artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: vortex-${{ matrix.target }}
+          path: target/${{ matrix.target }}/release/${{ matrix.bin }}

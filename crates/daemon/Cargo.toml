@@ -1,0 +1,24 @@
+[package]
+name = "vortex-daemon"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+vortex-core = { path = "../core" }
+vortex-imap = { path = "../connectors/imap" }
+vortex-otp = { path = "../otp" }
+vortex-classify = { path = "../classify" }
+vortex-ui-web = { path = "../ui-web" }
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+base64.workspace = true
+native-tls.workspace = true
+
+[dev-dependencies]
+vortex-imap = { path = "../connectors/imap", features = ["test-support"] }
+
+[lints]
+workspace = true

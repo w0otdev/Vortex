@@ -1,0 +1,16 @@
+[package]
+name = "vortex-classify"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+vortex-core = { path = "../core" }
+vortex-otp = { path = "../otp" }
+serde.workspace = true
+serde_json.workspace = true
+native-tls.workspace = true
+sha2.workspace = true
+
+[lints]
+workspace = true

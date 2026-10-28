@@ -1,0 +1,23 @@
+[package]
+name = "vortex-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "vortex"
+path = "src/main.rs"
+
+[dependencies]
+vortex-core = { path = "../core" }
+vortex-classify = { path = "../classify" }
+vortex-daemon = { path = "../daemon" }
+vortex-ui-web = { path = "../ui-web" }
+tokio.workspace = true
+
+[target.'cfg(target_os = "windows")'.dependencies]
+tao.workspace = true
+wry.workspace = true
+
+[lints]
+workspace = true

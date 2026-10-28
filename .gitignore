@@ -1,0 +1,11 @@
+/target
+**/*.rs.bk
+*.pdb
+*.db
+*.db-shm
+*.db-wal
+*.log
+*.tmp
+.github/context-mode/
+.DS_Store
+Thumbs.db
