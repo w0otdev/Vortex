@@ -1,6 +1,7 @@
 mod assistant;
 pub mod connectors;
 pub mod hub;
+mod local_models;
 pub mod notify;
 pub mod service;
 
@@ -296,18 +297,46 @@ pub fn parse_bulk_account_line(
 /// Syncs all (or one filtered) accounts concurrently without holding the global daemon mutex
 /// during network I/O. Each worker writes its fetched items into SQLite as soon as its own
 /// connection finishes so OTP codes from fast accounts appear immediately.
+static LAST_GWEB_SPAWN_SEC: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+static GWEB_CHILD_RUNNING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 pub fn sync_accounts_concurrent(
     state: &Arc<Mutex<DaemonState>>,
     only_account: Option<&str>,
     local_bind: &str,
 ) -> Result<serde_json::Value, String> {
-    let (jobs, secrets) = {
+    let (jobs, google_emails, secrets) = {
         let guard = state
             .lock()
             .map_err(|_| "state lock poisoned".to_string())?;
         let accounts = guard.store.list_accounts()?;
+        let all_items = guard
+            .store
+            .list_items(&ItemFilter {
+                limit: 200,
+                ..Default::default()
+            })
+            .unwrap_or_default();
+        let mut priority_gweb = Vec::new();
+        let mut needs_html_gweb = Vec::new();
+        let mut normal_gweb = Vec::new();
         let mut jobs = Vec::new();
         for acc in accounts {
+            if acc.auth_method == "google_web" || acc.host == "session.gmail.com" {
+                let em = acc.email_or_handle.clone();
+                let is_target = only_account.is_some_and(|t| !t.is_empty() && acc.id == t);
+                let missing_html = all_items.iter().any(|it| {
+                    it.account == acc.id && (it.body_html.is_empty() || it.body_text.len() < 280)
+                });
+                if is_target {
+                    priority_gweb.push(em);
+                } else if missing_html {
+                    needs_html_gweb.push(em);
+                } else {
+                    normal_gweb.push(em);
+                }
+                continue;
+            }
             if let Some(target) = only_account
                 && !target.is_empty()
                 && acc.id != target
@@ -324,29 +353,27 @@ pub fn sync_accounts_concurrent(
             };
             jobs.push((acc, last_uid));
         }
-        (jobs, guard.secrets.clone())
+        priority_gweb.extend(needs_html_gweb);
+        priority_gweb.extend(normal_gweb);
+        (jobs, priority_gweb, guard.secrets.clone())
     };
 
     let mut synced_count = 0usize;
     let mut accounts_ok = 0usize;
     let mut last_error: Option<String> = None;
-
-    let mut google_emails = Vec::new();
-    let mut imap_jobs = Vec::new();
-    for (acc, last_uid) in jobs {
-        if acc.auth_method == "google_web" || acc.host == "session.gmail.com" {
-            google_emails.push(acc.email_or_handle.clone());
-        } else {
-            imap_jobs.push((acc, last_uid));
-        }
-    }
+    let imap_jobs = jobs;
 
     if !google_emails.is_empty() {
-        static LAST_GWEB_SPAWN_SEC: std::sync::atomic::AtomicI64 =
-            std::sync::atomic::AtomicI64::new(0);
         let now_s = now_epoch();
         let prev_s = LAST_GWEB_SPAWN_SEC.load(std::sync::atomic::Ordering::Relaxed);
-        if now_s - prev_s >= 25 {
+        let min_gap = if only_account.is_some_and(|s| !s.is_empty()) {
+            2
+        } else {
+            8
+        };
+        if !GWEB_CHILD_RUNNING.load(std::sync::atomic::Ordering::Relaxed)
+            && now_s - prev_s >= min_gap
+        {
             LAST_GWEB_SPAWN_SEC.store(now_s, std::sync::atomic::Ordering::Relaxed);
             if let Ok(exe) = std::env::current_exe() {
                 let joined = google_emails.join(",");
@@ -360,8 +387,10 @@ pub fn sync_accounts_concurrent(
                     "--silent",
                 ]);
                 if let Ok(mut child) = cmd.spawn() {
+                    GWEB_CHILD_RUNNING.store(true, std::sync::atomic::Ordering::Relaxed);
                     std::thread::spawn(move || {
                         let _ = child.wait();
+                        GWEB_CHILD_RUNNING.store(false, std::sync::atomic::Ordering::Relaxed);
                     });
                 }
             }
@@ -493,6 +522,7 @@ pub struct DaemonState {
     ai_generation: u64,
     ai_last_error: Option<String>,
     ai_revision: u64,
+    model_downloads: local_models::Downloads,
 }
 
 impl DaemonState {
@@ -540,6 +570,7 @@ impl DaemonState {
             ai_generation: 0,
             ai_last_error: None,
             ai_revision: 0,
+            model_downloads: local_models::Downloads::default(),
         })
     }
 }
@@ -678,6 +709,12 @@ pub fn handle_http_connection(
         ("GET", "/click.m4a") => {
             write_http_bytes(&mut stream, 200, "audio/mp4", vortex_ui_web::CLICK_AUDIO)
         }
+        ("GET", "/local-models.js") => write_http_response(
+            &mut stream,
+            200,
+            "application/javascript; charset=utf-8",
+            &load_live_local_models_js(),
+        ),
         ("GET", "/api/ui-mtime") => write_http_response(
             &mut stream,
             200,
@@ -1016,14 +1053,17 @@ pub fn handle_http_connection(
                 .map(|a| a.to_string())
                 .unwrap_or_else(|_| "127.0.0.1:7788".into());
             if let Ok(exe) = std::env::current_exe() {
+                LAST_GWEB_SPAWN_SEC.store(now_epoch(), std::sync::atomic::Ordering::Relaxed);
                 let mut cmd = std::process::Command::new(exe);
                 cmd.args(["google-login", "--bind", &local_bind]);
                 if !email.is_empty() {
                     cmd.args(["--email", &email]);
                 }
                 if let Ok(mut child) = cmd.spawn() {
+                    GWEB_CHILD_RUNNING.store(true, std::sync::atomic::Ordering::Relaxed);
                     std::thread::spawn(move || {
                         let _ = child.wait();
+                        GWEB_CHILD_RUNNING.store(false, std::sync::atomic::Ordering::Relaxed);
                     });
                 }
             }
@@ -1127,12 +1167,21 @@ pub fn handle_http_connection(
                         } else {
                             body
                         };
-                        let body_html = msg
+                        let raw_html = msg
                             .get("body_html")
                             .and_then(|x| x.as_str())
                             .unwrap_or("")
-                            .trim()
-                            .to_string();
+                            .trim();
+                        let stripped_html = raw_html
+                            .split("<!--v:")
+                            .next()
+                            .unwrap_or(raw_html)
+                            .trim();
+                        let body_html = if stripped_html.contains('<') && stripped_html.contains('>') {
+                            stripped_html.to_string()
+                        } else {
+                            String::new()
+                        };
                         if !body_html.is_empty() {
                             let from_html = vortex_imap::mime::html_to_plain_text(&body_html);
                             if from_html.len() > body_text.len() {
@@ -1318,6 +1367,50 @@ pub fn handle_http_connection(
             let digest = generate_daily_digest(&items, now_epoch());
             let json = serde_json::to_string(&digest).map_err(|e| e.to_string())?;
             write_http_response(&mut stream, 200, "application/json", &json)
+        }
+        ("GET", "/api/ai/local-models") => {
+            let (endpoint, ram_mb) = {
+                let guard = state.lock().map_err(|_| "state lock poisoned")?;
+                (
+                    query_param(query, "endpoint")
+                        .unwrap_or_else(|| guard.config.ai.endpoint.clone()),
+                    guard.probe.ram_mb,
+                )
+            };
+            write_json_result(&mut stream, local_models::catalog(&endpoint, ram_mb))
+        }
+        ("GET", "/api/ai/local-models/status") => {
+            let guard = state.lock().map_err(|_| "state lock poisoned")?;
+            write_json_result(&mut stream, Ok(guard.model_downloads.status()))
+        }
+        ("POST", "/api/ai/local-models/download") => {
+            let result = (|| {
+                let value: serde_json::Value =
+                    serde_json::from_str(&body_str).map_err(|e| e.to_string())?;
+                let endpoint = value
+                    .get("endpoint")
+                    .and_then(|v| v.as_str())
+                    .ok_or("missing endpoint")?;
+                let model = value
+                    .get("model")
+                    .and_then(|v| v.as_str())
+                    .ok_or("missing model")?;
+                local_models::start_download(&state, endpoint, model)
+            })();
+            write_json_result(&mut stream, result)
+        }
+        ("POST", "/api/ai/local-models/cancel") => {
+            let result = (|| {
+                let value: serde_json::Value =
+                    serde_json::from_str(&body_str).map_err(|e| e.to_string())?;
+                let id = value
+                    .get("id")
+                    .and_then(|v| v.as_u64())
+                    .ok_or("missing download id")?;
+                let mut guard = state.lock().map_err(|_| "state lock poisoned")?;
+                guard.model_downloads.cancel(id)
+            })();
+            write_json_result(&mut stream, result)
         }
         ("GET", "/api/ai/settings") => {
             let guard = state.lock().map_err(|_| "state lock poisoned")?;
@@ -1619,15 +1712,26 @@ fn load_live_overlay_html() -> String {
     OTP_OVERLAY_HTML.to_string()
 }
 
+fn load_live_local_models_js() -> String {
+    #[cfg(debug_assertions)]
+    if let Ok(raw) = std::fs::read_to_string("crates/ui-web/src/local_models.js") {
+        return raw;
+    }
+    vortex_ui_web::LOCAL_MODELS_JS.to_string()
+}
+
 fn live_ui_mtime_ms() -> u64 {
     #[cfg(debug_assertions)]
     {
-        std::fs::metadata("crates/ui-web/src/lib.rs")
-            .and_then(|m| m.modified())
-            .ok()
-            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-            .map(|d| d.as_millis() as u64)
-            .unwrap_or(0)
+        let file_mtime = |path: &str| {
+            std::fs::metadata(path)
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0)
+        };
+        file_mtime("crates/ui-web/src/lib.rs").max(file_mtime("crates/ui-web/src/local_models.js"))
     }
     #[cfg(not(debug_assertions))]
     {
@@ -2091,6 +2195,7 @@ mod tests {
             ai_generation: 0,
             ai_revision: 0,
             ai_last_error: None,
+            model_downloads: local_models::Downloads::default(),
         }));
 
         let res = sync_accounts_concurrent(&state, None, "127.0.0.1:7788").unwrap();

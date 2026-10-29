@@ -484,12 +484,14 @@ fn run_native_window(url: &str, state: Arc<Mutex<DaemonState>>) -> ExitCode {
         WindowMinimize,
         WindowToggleMax,
         WindowClose,
+        WindowTheme(bool),
     }
 
     let event_loop = EventLoopBuilder::<DesktopEvent>::with_user_event().build();
     let window = match WindowBuilder::new()
         .with_title("Vortex")
         .with_decorations(false)
+        .with_background_color((18, 18, 17, 255))
         .with_window_icon(load_window_icon())
         .with_taskbar_icon(load_window_icon())
         .with_inner_size(LogicalSize::new(1260.0, 820.0))
@@ -510,14 +512,31 @@ fn run_native_window(url: &str, state: Arc<Mutex<DaemonState>>) -> ExitCode {
         .map(|d| d.join("webview2-inbox"))
         .unwrap_or_else(|| env::temp_dir().join("vortex-inbox-webview2"));
     let mut web_context = WebContext::new(Some(data_dir));
-    let webview = match WebViewBuilder::with_web_context(&mut web_context)
+    let webview = match WebViewBuilder::new_with_web_context(&mut web_context)
+        .with_background_color((18, 18, 17, 255))
         .with_url(url)
+        .with_new_window_req_handler(|target_url, _features| {
+            if target_url.starts_with("https://") || target_url.starts_with("http://") {
+                use std::os::windows::process::CommandExt;
+                use std::process::{Command, Stdio};
+                let _ = Command::new("rundll32")
+                    .args(["url.dll,FileProtocolHandler", &target_url])
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .creation_flags(0x0800_0000)
+                    .spawn();
+            }
+            wry::NewWindowResponse::Deny
+        })
         .with_ipc_handler(move |request| {
             let ev = match request.body().as_str() {
                 "win:drag" => DesktopEvent::WindowDrag,
                 "win:min" => DesktopEvent::WindowMinimize,
                 "win:max" => DesktopEvent::WindowToggleMax,
                 "win:close" => DesktopEvent::WindowClose,
+                "win:theme:dark" => DesktopEvent::WindowTheme(true),
+                "win:theme:light" => DesktopEvent::WindowTheme(false),
                 _ => return,
             };
             let _ = main_proxy.send_event(ev);
@@ -570,7 +589,7 @@ fn run_native_window(url: &str, state: Arc<Mutex<DaemonState>>) -> ExitCode {
     };
     let overlay_proxy = event_loop.create_proxy();
     let overlay_url = format!("{url}/otp-overlay");
-    let overlay_webview = match WebViewBuilder::with_web_context(&mut web_context)
+    let overlay_webview = match WebViewBuilder::new_with_web_context(&mut web_context)
         .with_transparent(true)
         .with_url(&overlay_url)
         .with_ipc_handler(move |request| {
@@ -642,7 +661,7 @@ fn run_native_window(url: &str, state: Arc<Mutex<DaemonState>>) -> ExitCode {
         let _ = (&webview, &overlay_webview, &web_context);
         *control_flow = ControlFlow::Wait;
         match event {
-            Event::NewEvents(StartCause::Init) | Event::Resumed => {
+            Event::NewEvents(StartCause::Init) => {
                 window.set_minimized(false);
                 window.set_visible(true);
                 window.set_always_on_top(true);
@@ -683,6 +702,15 @@ fn run_native_window(url: &str, state: Arc<Mutex<DaemonState>>) -> ExitCode {
             }
             Event::UserEvent(DesktopEvent::WindowClose) => {
                 *control_flow = ControlFlow::Exit;
+            }
+            Event::UserEvent(DesktopEvent::WindowTheme(dark)) => {
+                let bg = if dark {
+                    (18, 18, 17, 255)
+                } else {
+                    (228, 228, 224, 255)
+                };
+                window.set_background_color(Some(bg));
+                let _ = webview.set_background_color(bg);
             }
             Event::WindowEvent {
                 event: WindowEvent::CloseRequested,
@@ -726,10 +754,30 @@ fn run_google_login_window(args: &[String]) -> ExitCode {
 
     if silent {
         std::thread::spawn(|| {
-            std::thread::sleep(Duration::from_secs(24));
+            std::thread::sleep(Duration::from_secs(45));
             std::process::exit(0);
         });
     }
+
+    let fetch_local_api = |path: &str| -> String {
+        let Ok(mut s) = TcpStream::connect(&bind) else {
+            return "[]".to_string();
+        };
+        let _ = s.set_read_timeout(Some(Duration::from_secs(2)));
+        let req = format!("GET {path} HTTP/1.1\r\nHost: {bind}\r\nConnection: close\r\n\r\n");
+        if s.write_all(req.as_bytes()).is_err() {
+            return "[]".to_string();
+        }
+        let mut buf = Vec::new();
+        let _ = s.read_to_end(&mut buf);
+        let text = String::from_utf8_lossy(&buf);
+        text.split_once("\r\n\r\n")
+            .map(|(_, b)| b.trim().to_string())
+            .filter(|b| b.starts_with('['))
+            .unwrap_or_else(|| "[]".to_string())
+    };
+    let db_items_json = fetch_local_api("/api/items");
+    let db_accounts_json = fetch_local_api("/api/accounts");
 
     let start_url = if silent {
         let first_email = initial_email.split(',').next().unwrap_or("").trim();
@@ -746,7 +794,8 @@ fn run_google_login_window(args: &[String]) -> ExitCode {
             .to_string()
     } else {
         format!(
-            "https://accounts.google.com/AccountChooser?service=mail&Email={}&continue=https%3A%2F%2Fmail.google.com%2Fmail%2F",
+            "https://accounts.google.com/AccountChooser?service=mail&Email={}&continue=https%3A%2F%2Fmail.google.com%2Fmail%2F%3Fauthuser%3D{}",
+            initial_email.replace('@', "%40"),
             initial_email.replace('@', "%40")
         )
     };
@@ -755,13 +804,66 @@ fn run_google_login_window(args: &[String]) -> ExitCode {
         r#"(() => {{
   const DEFAULT_EMAIL = {default_email:?};
   const IS_SILENT = {is_silent};
+  const DB_ITEMS_JSON = {db_items_json:?};
+  const DB_ACCOUNTS_JSON = {db_accounts_json:?};
   let stage1Sent = false;
-  let stage2Sent = false;
   let submitted = false;
+  let pollBusy = false;
   let hiddenSent = false;
   let mailTicks = 0;
   let atomCache = null;
   let atomFetching = false;
+  const accountBaseMap = new Map();
+  const accountIkMap = new Map();
+  const slotAtomMap = new Map();
+  const dbPendingByEmail = new Map();
+  const knownEmails = new Set();
+  const hasRealHtml = (s) => Boolean(s && /<(table|div|p|br|a\s|span|img|font|b\b|strong|tr|td|h[1-6]|ul|ol|li|blockquote)/i.test(s));
+
+  try {{
+    for (const part of (DEFAULT_EMAIL || "").split(",")) {{
+      const clean = part.trim().toLowerCase();
+      if (clean && clean.includes("@")) knownEmails.add(clean);
+    }}
+    const accs = JSON.parse(DB_ACCOUNTS_JSON || "[]");
+    if (Array.isArray(accs)) {{
+      for (const a of accs) {{
+        const em = ((a && (a.email_or_handle || a.id)) || "").trim().toLowerCase();
+        if (em && em.includes("@") && (a.auth_method === "google_web" || a.host === "session.gmail.com")) {{
+          knownEmails.add(em);
+        }}
+      }}
+    }}
+    const dbItems = JSON.parse(DB_ITEMS_JSON || "[]");
+    if (Array.isArray(dbItems)) {{
+      for (const it of dbItems) {{
+        const acc = ((it && it.account) || "").trim().toLowerCase();
+        const extId = ((it && it.external_id) || "").trim();
+        const html = (it && it.body_html) || "";
+        const txt = (it && it.body_text) || "";
+        if (!acc || !extId) continue;
+        if (hasRealHtml(html) && txt.length >= 280) continue;
+        let hexId = /^[0-9a-f]{{12,24}}$/i.test(extId) ? extId.toLowerCase() : "";
+        if (!hexId) {{
+          const decMatch = extId.match(/:(\d{{15,22}})$/);
+          if (decMatch) {{
+            try {{ hexId = BigInt(decMatch[1]).toString(16); }} catch (_) {{}}
+          }}
+        }}
+        if (!dbPendingByEmail.has(acc)) dbPendingByEmail.set(acc, []);
+        dbPendingByEmail.get(acc).push({{
+          id: hexId || extId,
+          hexId,
+          sender: it.sender || "Gmail",
+          subject: it.subject || "(Không có tiêu đề)",
+          body: txt,
+          body_html: "",
+          received_at: it.received_at || 0,
+          unread: it.state === "unread"
+        }});
+      }}
+    }}
+  }} catch (_) {{}}
 
   if (location.hostname === "mail.google.com") {{
     try {{
@@ -780,28 +882,40 @@ fn run_google_login_window(args: &[String]) -> ExitCode {
     return m ? m[0] : "/mail/u/0/";
   }}
 
-  function detectEmail(atomEmail) {{
-    if (atomEmail && atomEmail.includes("@")) return atomEmail.trim();
+  function detectCurrentPageEmail() {{
     const titleMatch = (document.title || "").match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{{2,}}/);
-    if (titleMatch) return titleMatch[0];
+    if (titleMatch) return titleMatch[0].toLowerCase();
     if (Array.isArray(window.GLOBALS)) {{
       const gMail = window.GLOBALS.find((x) => typeof x === "string" && /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{{2,}}$/.test(x));
-      if (gMail) return gMail;
+      if (gMail) return gMail.toLowerCase();
     }}
     const el = document.querySelector('[data-email],[data-identifier],a[aria-label*="@"],button[aria-label*="@"]');
     if (el) {{
       const raw = el.getAttribute("data-email") || el.getAttribute("data-identifier") || el.getAttribute("aria-label") || "";
       const m = raw.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{{2,}}/);
+      if (m) return m[0].toLowerCase();
+    }}
+    return "";
+  }}
+
+  function detectEmail(atomEmail) {{
+    if (atomEmail && atomEmail.includes("@")) {{
+      const clean = atomEmail.trim();
+      try {{ localStorage.setItem("vortex_google_email", clean); }} catch (_) {{}}
+      return clean;
+    }}
+    const pageEm = detectCurrentPageEmail();
+    if (pageEm) {{
+      try {{ localStorage.setItem("vortex_google_email", pageEm); }} catch (_) {{}}
+      return pageEm;
+    }}
+    if (location.hostname === "mail.google.com") {{
+      const bodyTxt = (document.body && document.body.innerText) || "";
+      const m = bodyTxt.match(/[a-zA-Z0-9._%+-]+@gmail\.com/);
       if (m) {{
         try {{ localStorage.setItem("vortex_google_email", m[0]); }} catch (_) {{}}
         return m[0];
       }}
-    }}
-    const bodyTxt = (document.body && document.body.innerText) || "";
-    const m = bodyTxt.match(/[a-zA-Z0-9._%+-]+@gmail\.com/);
-    if (m) {{
-      try {{ localStorage.setItem("vortex_google_email", m[0]); }} catch (_) {{}}
-      return m[0];
     }}
     const firstDefault = (DEFAULT_EMAIL || "").split(",")[0].trim();
     if (firstDefault) return firstDefault;
@@ -827,7 +941,10 @@ fn run_google_login_window(args: &[String]) -> ExitCode {
 
   async function parseAtomUrl(url) {{
     try {{
-      const res = await fetch(url, {{ credentials: "include" }});
+      const ctrl = new AbortController();
+      const timer = setTimeout(() => ctrl.abort(), 4000);
+      const res = await fetch(url, {{ credentials: "include", signal: ctrl.signal }});
+      clearTimeout(timer);
       if (!res.ok) return null;
       const xmlText = await res.text();
       const doc = new DOMParser().parseFromString(xmlText, "text/xml");
@@ -841,6 +958,10 @@ fn run_google_login_window(args: &[String]) -> ExitCode {
           const m = href.match(/account_id=([^&]+)/);
           if (m) atomEmail = decodeURIComponent(m[1]);
         }}
+      }}
+      const uMatch = url.match(/^\/mail\/u\/\d+\//) || (res.url && res.url.match(/\/mail\/u\/\d+\//));
+      if (atomEmail && uMatch) {{
+        accountBaseMap.set(atomEmail.toLowerCase(), uMatch[0]);
       }}
       const entries = Array.from(doc.querySelectorAll("entry")).map((en, idx) => {{
         const rawAtomId = ((en.querySelector("id") || {{}}).textContent || "").trim();
@@ -877,17 +998,45 @@ fn run_google_login_window(args: &[String]) -> ExitCode {
           unread: true
         }};
       }});
-      return {{ email: atomEmail, entries }};
+      const parsed = {{ email: atomEmail, entries, base: uMatch ? uMatch[0] : "" }};
+      if (atomEmail) slotAtomMap.set(atomEmail.toLowerCase(), parsed);
+      return parsed;
     }} catch (_) {{
       return null;
     }}
   }}
 
+  let slotsDiscoveredPromise = null;
+  async function discoverAccountSlots() {{
+    if (slotsDiscoveredPromise) return slotsDiscoveredPromise;
+    slotsDiscoveredPromise = (async () => {{
+      const slotUrls = [
+        "/mail/u/0/feed/atom",
+        "/mail/u/1/feed/atom",
+        "/mail/u/2/feed/atom",
+        "/mail/u/3/feed/atom",
+        "/mail/u/4/feed/atom",
+        "/mail/u/5/feed/atom",
+        "/mail/u/6/feed/atom",
+        "/mail/u/7/feed/atom"
+      ];
+      await Promise.all(slotUrls.map((u) => parseAtomUrl(u)));
+    }})();
+    return slotsDiscoveredPromise;
+  }}
+
   async function fetchAtomFeed() {{
     if (atomCache || atomFetching) return atomCache;
     atomFetching = true;
-    const base = mailBasePath();
-    atomCache = await parseAtomUrl(base + "feed/atom");
+    const pageEm = detectCurrentPageEmail();
+    const authQ = (location.search || "").match(/[?&]authuser=([^&]+)/);
+    let atomUrl = mailBasePath() + "feed/atom";
+    if (pageEm && accountBaseMap.has(pageEm)) {{
+      atomUrl = accountBaseMap.get(pageEm) + "feed/atom";
+    }} else if (authQ && !(location.pathname || "").match(/^\/mail\/u\/\d+\//)) {{
+      atomUrl = "/mail/feed/atom?authuser=" + authQ[1];
+    }}
+    atomCache = await parseAtomUrl(atomUrl);
     atomFetching = false;
     return atomCache;
   }}
@@ -895,30 +1044,33 @@ fn run_google_login_window(args: &[String]) -> ExitCode {
   let additionalSyncPromise = null;
 
   async function syncAdditionalSilentAccounts(primaryEmail) {{
-    if (!IS_SILENT || !window.ipc) return;
+    if (!window.ipc) return;
     if (additionalSyncPromise) return additionalSyncPromise;
     additionalSyncPromise = (async () => {{
-      const targets = (DEFAULT_EMAIL || "").split(",").map((s) => s.trim()).filter(Boolean);
-      const urls = ["/mail/u/0/feed/atom", "/mail/u/1/feed/atom", "/mail/u/2/feed/atom", "/mail/u/3/feed/atom"];
-      for (const em of targets) {{
-        urls.push("/mail/feed/atom?authuser=" + encodeURIComponent(em));
-      }}
-      const allowed = new Set(targets.map((t) => t.toLowerCase()));
-      const seenEmails = new Set(primaryEmail ? [primaryEmail.toLowerCase()] : []);
-      for (const u of urls) {{
-        const parsed = await parseAtomUrl(u);
-        const emLower = parsed && parsed.email ? parsed.email.toLowerCase() : "";
-        if (parsed && emLower && !seenEmails.has(emLower) && (allowed.size === 0 || allowed.has(emLower))) {{
-          seenEmails.add(emLower);
-          const entries = parsed.entries || [];
-          const baseMatch = u.match(/^\/mail\/u\/\d+\//);
-          const resolved = await resolveIkAndBase(baseMatch ? baseMatch[0] : "", parsed.email);
-          await enrichFullBodies(entries, resolved.ik, resolved.base, parsed.email);
-          window.ipc.postMessage("WEB_SYNC_PROGRESS:" + JSON.stringify({{
-            email: parsed.email,
-            messages: entries
-          }}));
+      await discoverAccountSlots();
+      const primaryLow = (primaryEmail || "").trim().toLowerCase();
+      const targetEmails = new Set();
+      for (const em of knownEmails) targetEmails.add(em);
+      for (const em of dbPendingByEmail.keys()) targetEmails.add(em);
+      for (const em of slotAtomMap.keys()) targetEmails.add(em);
+      targetEmails.delete(primaryLow);
+
+      for (const emLower of targetEmails) {{
+        let parsed = slotAtomMap.get(emLower);
+        if (!parsed) {{
+          parsed = await parseAtomUrl("/mail/feed/atom?authuser=" + encodeURIComponent(emLower));
         }}
+        const atomEntries = (parsed && parsed.entries) ? parsed.entries : [];
+        const pendingRows = dbPendingByEmail.get(emLower) || [];
+        const merged = mergeMessages([], {{ entries: atomEntries }}, pendingRows);
+        if (merged.length === 0) continue;
+        const hintBase = accountBaseMap.get(emLower) || (parsed && parsed.base) || "";
+        const resolved = await resolveIkAndBase(hintBase, emLower);
+        await enrichFullBodies(merged, resolved.ik, resolved.base, emLower);
+        window.ipc.postMessage("WEB_SYNC_PROGRESS:" + JSON.stringify({{
+          email: (parsed && parsed.email) || emLower,
+          messages: merged
+        }}));
       }}
     }})();
     return additionalSyncPromise;
@@ -928,7 +1080,7 @@ fn run_google_login_window(args: &[String]) -> ExitCode {
     const nowSec = Math.floor(Date.now() / 1000);
     const rows = Array.from(document.querySelectorAll("tr.zA"));
     const out = [];
-    rows.slice(0, 30).forEach((tr, idx) => {{
+    rows.slice(0, 32).forEach((tr, idx) => {{
       const unread = tr.classList.contains("zE");
       const senderEl = tr.querySelector("[email],[data-hovercard-id]");
       const senderEmail = senderEl
@@ -996,85 +1148,148 @@ fn run_google_login_window(args: &[String]) -> ExitCode {
     return out;
   }}
 
-  function detectIk(userEmail) {{
-    if (Array.isArray(window.GLOBALS)) {{
-      if (userEmail) {{
-        const idx = window.GLOBALS.indexOf(userEmail);
-        if (idx > 0 && typeof window.GLOBALS[idx - 1] === "string" && /^[0-9a-f]{{6,20}}$/i.test(window.GLOBALS[idx - 1])) {{
-          return window.GLOBALS[idx - 1];
-        }}
-      }}
-      if (typeof window.GLOBALS[9] === "string" && /^[0-9a-f]{{6,20}}$/i.test(window.GLOBALS[9])) {{
-        return window.GLOBALS[9];
+  function extractIkFromHtml(html, userEmail) {{
+    if (!html) return "";
+    const lowHtml = html.toLowerCase();
+    const lowUser = (userEmail || "").trim().toLowerCase();
+    if (lowUser) {{
+      if (!lowHtml.includes(lowUser)) return "";
+      let pos = lowHtml.indexOf(lowUser);
+      while (pos !== -1) {{
+        const windowBefore = html.slice(Math.max(0, pos - 160), pos);
+        const m = windowBefore.match(/["']([0-9a-f]{{6,20}})["']\s*,\s*["']$/i)
+          || windowBefore.match(/["']([0-9a-f]{{8,16}})["'][^"']{{0,40}}$/i);
+        if (m) return m[1];
+        pos = lowHtml.indexOf(lowUser, pos + lowUser.length);
       }}
     }}
-    try {{
-      const resEntries = performance.getEntriesByType("resource") || [];
-      for (const re of resEntries) {{
-        const m = (re.name || "").match(/[?&]ik=([0-9a-f]{{6,20}})/i);
-        if (m) return m[1];
+    const pairRe = /["']([0-9a-f]{{6,20}})["']\s*,\s*["']([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{{2,}})["']/gi;
+    let pm;
+    while ((pm = pairRe.exec(html)) !== null) {{
+      if (!lowUser || pm[2].toLowerCase() === lowUser) return pm[1];
+    }}
+    if (lowUser) {{
+      const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/i);
+      if (titleMatch && titleMatch[1].toLowerCase().includes(lowUser)) {{
+        const m0 = html.match(/GLOBALS\s*=\s*\[(?:[^,\]]*,){{9}}\s*["']([0-9a-f]{{6,20}})["']/i);
+        if (m0) return m0[1];
+        const m2 = html.match(/[?&]ik=([0-9a-f]{{6,20}})/i);
+        if (m2) return m2[1];
       }}
-    }} catch (_) {{}}
-    const html = (document.documentElement && document.documentElement.innerHTML) || "";
+      return "";
+    }}
     const m0 = html.match(/GLOBALS\s*=\s*\[(?:[^,\]]*,){{9}}\s*["']([0-9a-f]{{6,20}})["']/i);
     if (m0) return m0[1];
-    const m1 = html.match(/["']([0-9a-f]{{8,16}})["']\s*,\s*["'][a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{{2,}}["']/i);
-    if (m1) return m1[1];
     const m2 = html.match(/[?&]ik=([0-9a-f]{{6,20}})/i);
     return m2 ? m2[1] : "";
   }}
 
-  async function resolveIkAndBase(hintBase, userEmail) {{
-    if (hintBase === mailBasePath() && (!userEmail || userEmail.toLowerCase() === detectEmail("").toLowerCase())) {{
-      const localIk = detectIk(userEmail);
-      if (localIk) return {{ ik: localIk, base: mailBasePath() }};
+  function detectIk(userEmail) {{
+    const lowUser = (userEmail || "").trim().toLowerCase();
+    if (lowUser && accountIkMap.has(lowUser)) return accountIkMap.get(lowUser);
+    const pageEm = detectCurrentPageEmail();
+    const isSameUser = !lowUser || (pageEm && pageEm === lowUser);
+    if (Array.isArray(window.GLOBALS)) {{
+      if (lowUser) {{
+        const idx = window.GLOBALS.findIndex((x) => typeof x === "string" && x.toLowerCase() === lowUser);
+        if (idx > 0 && typeof window.GLOBALS[idx - 1] === "string" && /^[0-9a-f]{{4,20}}$/i.test(window.GLOBALS[idx - 1])) {{
+          accountIkMap.set(lowUser, window.GLOBALS[idx - 1]);
+          return window.GLOBALS[idx - 1];
+        }}
+      }}
+      if (isSameUser) {{
+        const anyEmailIdx = window.GLOBALS.findIndex((x) => typeof x === "string" && /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{{2,}}$/.test(x));
+        if (anyEmailIdx > 0 && typeof window.GLOBALS[anyEmailIdx - 1] === "string" && /^[0-9a-f]{{4,20}}$/i.test(window.GLOBALS[anyEmailIdx - 1])) {{
+          return window.GLOBALS[anyEmailIdx - 1];
+        }}
+        if (typeof window.GLOBALS[9] === "string" && /^[0-9a-f]{{4,20}}$/i.test(window.GLOBALS[9])) {{
+          return window.GLOBALS[9];
+        }}
+      }}
     }}
-    const fetchUrl = userEmail
-      ? ("/mail/?authuser=" + encodeURIComponent(userEmail))
-      : (hintBase || mailBasePath());
-    try {{
-      const ctrl = new AbortController();
-      const t = setTimeout(() => ctrl.abort(), 5500);
-      const res = await fetch(fetchUrl, {{ credentials: "include", signal: ctrl.signal }});
-      clearTimeout(t);
-      if (!res.ok) return {{ ik: "", base: hintBase || "/mail/u/0/" }};
-      let resolvedBase = hintBase || "/mail/u/0/";
-      if (res.url) {{
-        const um = res.url.match(/\/mail\/u\/\d+\//);
-        if (um) resolvedBase = um[0];
-      }}
-      const html = await res.text();
-      if (!resolvedBase || resolvedBase === "/mail/u/0/") {{
-        const bm = html.match(/\/mail\/u\/\d+\//);
-        if (bm) resolvedBase = bm[0];
-      }}
-      if (userEmail) {{
-        const lowHtml = html.toLowerCase();
-        const lowEmail = userEmail.toLowerCase();
-        if (!lowHtml.includes(lowEmail)) {{
-          return {{ ik: "", base: resolvedBase, signedOut: true }};
+    if (isSameUser) {{
+      try {{
+        const resEntries = performance.getEntriesByType("resource") || [];
+        for (const re of resEntries) {{
+          const m = (re.name || "").match(/[?&]ik=([0-9a-f]{{4,20}})/i);
+          if (m) {{
+            if (lowUser) accountIkMap.set(lowUser, m[1]);
+            return m[1];
+          }}
         }}
-        let pos = lowHtml.indexOf(lowEmail);
-        while (pos !== -1) {{
-          const windowBefore = html.slice(Math.max(0, pos - 80), pos);
-          const m = windowBefore.match(/["']([0-9a-f]{{8,20}})["']\s*,\s*["']$/i);
-          if (m) return {{ ik: m[1], base: resolvedBase }};
-          pos = lowHtml.indexOf(lowEmail, pos + lowEmail.length);
+      }} catch (_) {{}}
+    }}
+    const html = (document.documentElement && document.documentElement.innerHTML) || "";
+    const found = extractIkFromHtml(html, lowUser);
+    if (found && lowUser) accountIkMap.set(lowUser, found);
+    return found;
+  }}
+
+  async function resolveIkAndBase(hintBase, userEmail) {{
+    const lowUser = (userEmail || "").trim().toLowerCase();
+    const mappedBase = (lowUser && accountBaseMap.get(lowUser)) || "";
+    const pageEm = detectCurrentPageEmail();
+    if (!lowUser || (pageEm && pageEm === lowUser)) {{
+      const localIk = detectIk(lowUser);
+      const localBase = mappedBase || hintBase || mailBasePath();
+      if (localIk) {{
+        if (lowUser) {{
+          accountIkMap.set(lowUser, localIk);
+          accountBaseMap.set(lowUser, localBase);
         }}
+        return {{ ik: localIk, base: localBase }};
       }}
-      const m1 = html.match(/["']([0-9a-f]{{8,20}})["']\s*,\s*["'][a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{{2,}}["']/i);
-      if (m1) return {{ ik: m1[1], base: resolvedBase }};
-      const m0 = html.match(/GLOBALS\s*=\s*\[(?:[^,\]]*,){{9}}\s*["']([0-9a-f]{{6,20}})["']/i);
-      if (m0) return {{ ik: m0[1], base: resolvedBase }};
-      const m2 = html.match(/[?&]ik=([0-9a-f]{{6,20}})/i);
-      if (m2) return {{ ik: m2[1], base: resolvedBase }};
-      return {{ ik: "", base: resolvedBase }};
-    }} catch (_) {{}}
-    return {{ ik: "", base: hintBase || "/mail/u/0/" }};
+    }}
+    if (lowUser && accountIkMap.has(lowUser) && mappedBase) {{
+      return {{ ik: accountIkMap.get(lowUser), base: mappedBase }};
+    }}
+    const candidateUrls = [];
+    if (mappedBase) candidateUrls.push(mappedBase);
+    if (hintBase && !candidateUrls.includes(hintBase) && (!lowUser || hintBase !== "/mail/u/0/" || mappedBase === "/mail/u/0/")) {{
+      candidateUrls.push(hintBase);
+    }}
+    if (lowUser) {{
+      candidateUrls.push("/mail/?authuser=" + encodeURIComponent(lowUser));
+      candidateUrls.push("/mail/u/0/?authuser=" + encodeURIComponent(lowUser));
+    }} else if (location.hostname === "mail.google.com") {{
+      candidateUrls.push(mailBasePath());
+    }}
+    for (const fetchUrl of candidateUrls) {{
+      try {{
+        const ctrl = new AbortController();
+        const t = setTimeout(() => ctrl.abort(), 5000);
+        const res = await fetch(fetchUrl, {{ credentials: "include", signal: ctrl.signal }});
+        clearTimeout(t);
+        if (!res.ok) continue;
+        let resolvedBase = mappedBase || "";
+        if (res.url) {{
+          const um = res.url.match(/\/mail\/u\/\d+\//);
+          if (um) resolvedBase = um[0];
+        }}
+        const html = await res.text();
+        const foundIk = extractIkFromHtml(html, lowUser);
+        if (foundIk) {{
+          if (!resolvedBase) {{
+            resolvedBase = hintBase || mailBasePath() || "/mail/u/0/";
+          }}
+          if (lowUser) {{
+            accountIkMap.set(lowUser, foundIk);
+            accountBaseMap.set(lowUser, resolvedBase);
+          }}
+          return {{ ik: foundIk, base: resolvedBase }};
+        }}
+      }} catch (_) {{}}
+    }}
+    return {{
+      ik: (lowUser && accountIkMap.get(lowUser)) || detectIk(lowUser),
+      base: mappedBase || hintBase || mailBasePath() || "/mail/u/0/"
+    }};
   }}
 
   function cleanExtractedNodes(root) {{
     root.querySelectorAll("script, style, meta, title, link, [style*='display:none'], [style*='visibility:hidden']").forEach((n) => n.remove());
+    root.querySelectorAll("[src^='//']").forEach((n) => n.setAttribute("src", "https:" + n.getAttribute("src")));
+    root.querySelectorAll("[href^='//']").forEach((n) => n.setAttribute("href", "https:" + n.getAttribute("href")));
     let cleanHtml = (root.innerHTML || "").trim();
     let cleanTxt = (root.innerText || root.textContent || "").trim();
     if (/^(?:<!doctype|<html)/i.test(cleanTxt)) {{
@@ -1091,58 +1306,66 @@ fn run_google_login_window(args: &[String]) -> ExitCode {
   function extractPrintViewBody(html) {{
     const doc = new DOMParser().parseFromString(html, "text/html");
     const msgTables = Array.from(doc.querySelectorAll("table.message"));
-    if (msgTables.length > 0) {{
-      const lastTbl = msgTables[msgTables.length - 1];
-      const trs = Array.from(lastTbl.querySelectorAll(":scope > tbody > tr, :scope > tr"));
-      const bodyNode = trs.length > 0 ? trs[trs.length - 1] : lastTbl;
-      const res = cleanExtractedNodes(bodyNode);
-      if (res.cleanTxt.length > 10) return res;
+    for (let tIdx = msgTables.length - 1; tIdx >= 0; tIdx--) {{
+      const tbl = msgTables[tIdx];
+      const innerBodyTd = tbl.querySelector("td > table td, td table td");
+      if (innerBodyTd) {{
+        const res = cleanExtractedNodes(innerBodyTd);
+        if (res.cleanHtml.length > 0 && (res.cleanTxt.length > 2 || hasRealHtml(res.cleanHtml))) {{
+          return res;
+        }}
+      }}
+      const trs = Array.from(tbl.querySelectorAll(":scope > tbody > tr, :scope > tr"));
+      for (let rIdx = trs.length - 1; rIdx >= 0; rIdx--) {{
+        const row = trs[rIdx];
+        const bodyNode = row.querySelector("td table td") || row.querySelector(":scope > td") || row;
+        const res = cleanExtractedNodes(bodyNode);
+        if (res.cleanHtml.length > 0 && res.cleanTxt.length > 10) return res;
+      }}
     }}
-    const specificNode = doc.querySelector(".maincontent, .a3s, .ii.gt, .msg");
+    const specificNode = doc.querySelector(".maincontent, .a3s, .ii.gt, .msg, .body");
     if (specificNode) {{
       const res = cleanExtractedNodes(specificNode);
-      if (res.cleanTxt.length > 10) return res;
+      if (res.cleanHtml.length > 0 || res.cleanTxt.length > 10) return res;
     }}
     return null;
   }}
 
   async function enrichFullBodies(rows, ik, customBase, userEmail) {{
     if (!rows || !rows.length) return;
-    let base = customBase || mailBasePath();
-    let activeIk = ik || "";
-    if (!activeIk) {{
-      const resolved = await resolveIkAndBase(base, userEmail || "");
-      activeIk = resolved.ik;
-      if (resolved.base) base = resolved.base;
-    }}
-    const targets = rows.slice(0, 20).filter((r) => r.hexId || /^[0-9a-f]{{12,24}}$/i.test(r.id || ""));
+    const resolved = await resolveIkAndBase(customBase || "", userEmail || "");
+    const base = resolved.base || customBase || mailBasePath();
+    const activeIk = resolved.ik || ik || detectIk(userEmail || "");
+    const authQ = userEmail ? ("&authuser=" + encodeURIComponent(userEmail)) : "";
+    const targets = rows.slice(0, 35).filter((r) => !hasRealHtml(r.body_html) && (r.hexId || /^[0-9a-f]{{12,24}}$/i.test(r.id || "")));
     for (let i = 0; i < targets.length; i += 6) {{
       const batch = targets.slice(i, i + 6);
       await Promise.all(batch.map(async (r) => {{
         const thId = r.hexId || r.id;
         const urls = [];
         if (activeIk) {{
+          urls.push(base + "?ui=2&ik=" + encodeURIComponent(activeIk) + authQ + "&view=pt&search=all&th=" + encodeURIComponent(thId) + "&siml=" + encodeURIComponent(thId));
           urls.push(base + "?ui=2&ik=" + encodeURIComponent(activeIk) + "&view=pt&search=all&th=" + encodeURIComponent(thId));
-        }}
-        if (userEmail) {{
-          const authParam = "authuser=" + encodeURIComponent(userEmail);
-          if (activeIk) {{
-            urls.push("/mail/?ui=2&" + authParam + "&ik=" + encodeURIComponent(activeIk) + "&view=pt&search=all&th=" + encodeURIComponent(thId));
+          if (userEmail) {{
+            urls.push("/mail/?ui=2" + authQ + "&ik=" + encodeURIComponent(activeIk) + "&view=pt&search=all&th=" + encodeURIComponent(thId));
           }}
+          urls.push(base + "?ui=2&ik=" + encodeURIComponent(activeIk) + authQ + "&view=om&th=" + encodeURIComponent(thId));
         }}
-        urls.push(base + "h/vortex/?v=pt&th=" + encodeURIComponent(thId));
-        urls.push(base + "h/vortex/?v=c&th=" + encodeURIComponent(thId));
         for (const url of urls) {{
           const ctrl = new AbortController();
-          const timer = setTimeout(() => ctrl.abort(), 3500);
+          const timer = setTimeout(() => ctrl.abort(), 4000);
           try {{
             const res = await fetch(url, {{ credentials: "include", signal: ctrl.signal }});
             clearTimeout(timer);
             if (!res.ok) continue;
             const text = await res.text();
+            if (url.includes("view=om") && /Content-Type:/i.test(text) && text.length > 80) {{
+              r.raw_mime = text;
+              break;
+            }}
             const parsed = extractPrintViewBody(text);
-            if (parsed && (parsed.cleanHtml.length > 40 || parsed.cleanTxt.length > (r.body || "").length)) {{
-              if (parsed.cleanHtml.length > 40) r.body_html = parsed.cleanHtml;
+            if (parsed && (parsed.cleanHtml.length > 0 || parsed.cleanTxt.length > (r.body || "").length)) {{
+              if (parsed.cleanHtml.length > 0) r.body_html = parsed.cleanHtml;
               if (parsed.cleanTxt.length > (r.body || "").length) r.body = parsed.cleanTxt;
               break;
             }}
@@ -1154,7 +1377,7 @@ fn run_google_login_window(args: &[String]) -> ExitCode {
     }}
   }}
 
-  function mergeMessages(domRows, atom) {{
+  function mergeMessages(domRows, atom, pendingRows) {{
     const merged = [];
     const byKey = new Map();
     const normKey = (item) => (item.hexId || item.id || item.subject || "").toLowerCase();
@@ -1163,12 +1386,13 @@ fn run_google_login_window(args: &[String]) -> ExitCode {
       byKey.set(k, r);
       merged.push(r);
     }}
-    if (atom && atom.entries) {{
-      for (const a of atom.entries) {{
+    const mergeExtra = (list) => {{
+      if (!list) return;
+      for (const a of list) {{
         const k = normKey(a);
         const existing = byKey.get(k) || merged.find((m) => (m.subject || "").toLowerCase() === (a.subject || "").toLowerCase());
         if (existing) {{
-          if (a.hexId) {{
+          if (a.hexId && !existing.hexId) {{
             existing.hexId = a.hexId;
             existing.id = a.hexId;
           }}
@@ -1178,78 +1402,98 @@ fn run_google_login_window(args: &[String]) -> ExitCode {
           if (a.body_html && a.body_html.length > (existing.body_html || "").length) {{
             existing.body_html = a.body_html;
           }}
-          if (a.received_at) existing.received_at = a.received_at;
+          if (a.received_at && !existing.received_at) existing.received_at = a.received_at;
         }} else {{
           byKey.set(k, a);
           merged.push(a);
         }}
       }}
-    }}
+    }};
+    if (atom && atom.entries) mergeExtra(atom.entries);
+    if (pendingRows && pendingRows.length) mergeExtra(pendingRows);
     return merged;
   }}
 
   async function pollAndSync() {{
-    if (submitted) return;
-
-    if (location.hostname.includes("myaccount.google.com")) {{
-      if (window.ipc && !hiddenSent) {{
-        hiddenSent = true;
-        window.ipc.postMessage("HIDE_WINDOW");
-      }}
-      location.replace("https://mail.google.com/mail/");
-      return;
-    }}
-
-    if (location.hostname.includes("accounts.google.com")) {{
-      ensureHelperBar("Vortex: Chọn hoặc đăng nhập tài khoản Google của bạn.");
-      detectEmail("");
-      return;
-    }}
-
-    if (location.hostname === "mail.google.com") {{
-      if (window.ipc && !hiddenSent) {{
-        hiddenSent = true;
-        window.ipc.postMessage("HIDE_WINDOW");
-      }}
-      mailTicks += 1;
-      const atom = await fetchAtomFeed();
-      const domRows = collectDomRows();
-      const email = detectEmail(atom ? atom.email : "");
-
-      if (!IS_SILENT && !stage1Sent && email && window.ipc) {{
-        stage1Sent = true;
-        const fastMsgs = mergeMessages(domRows, atom);
-        window.ipc.postMessage("WEB_SYNC_PROGRESS:" + JSON.stringify({{
-          email,
-          messages: fastMsgs
-        }}));
+    if (submitted || pollBusy) return;
+    pollBusy = true;
+    try {{
+      if (location.hostname.includes("myaccount.google.com")) {{
+        if (window.ipc && !hiddenSent) {{
+          hiddenSent = true;
+          window.ipc.postMessage("HIDE_WINDOW");
+        }}
+        const firstDefault = (DEFAULT_EMAIL || "").split(",")[0].trim();
+        location.replace(firstDefault ? ("https://mail.google.com/mail/?authuser=" + encodeURIComponent(firstDefault)) : "https://mail.google.com/mail/");
+        return;
       }}
 
-      const ik = detectIk(email);
-      const mergedNow = mergeMessages(domRows, atom);
-      const readyToFinish = (mergedNow.length > 0 && (Boolean(ik) || mailTicks >= 10)) || (mailTicks >= 14 && email);
-      if (readyToFinish && email && window.ipc) {{
-        submitted = true;
-        await Promise.all([
-          mergedNow.length > 0 ? enrichFullBodies(mergedNow, ik, mailBasePath(), email) : Promise.resolve(),
-          syncAdditionalSilentAccounts(email)
-        ]);
-        window.ipc.postMessage("WEB_SYNC_DONE:" + JSON.stringify({{
-          email,
-          messages: mergedNow
-        }}));
+      if (location.hostname.includes("accounts.google.com")) {{
+        ensureHelperBar("Vortex: Chọn hoặc đăng nhập tài khoản Google của bạn.");
+        return;
       }}
+
+      if (location.hostname === "mail.google.com") {{
+        if (window.ipc && !hiddenSent) {{
+          hiddenSent = true;
+          window.ipc.postMessage("HIDE_WINDOW");
+        }}
+        mailTicks += 1;
+        const atom = await fetchAtomFeed();
+        const domRows = collectDomRows();
+        const email = detectEmail(atom ? atom.email : "");
+        const emailLow = (email || "").toLowerCase();
+        if (emailLow) {{
+          const curPathMatch = (location.pathname || "").match(/^\/mail\/u\/\d+\//);
+          if (curPathMatch && detectCurrentPageEmail() === emailLow) {{
+            accountBaseMap.set(emailLow, curPathMatch[0]);
+          }}
+        }}
+        const ik = detectIk(email);
+        const pendingForPrimary = emailLow ? (dbPendingByEmail.get(emailLow) || []) : [];
+        const mergedNow = mergeMessages(domRows, atom, pendingForPrimary);
+
+        if (!IS_SILENT && !stage1Sent && email && window.ipc && mergedNow.length > 0) {{
+          stage1Sent = true;
+          window.ipc.postMessage("WEB_SYNC_PROGRESS:" + JSON.stringify({{
+            email,
+            messages: mergedNow
+          }}));
+        }}
+
+        const readyToFinish = (mergedNow.length > 0 && ((Boolean(ik) && (domRows.length > 0 || mailTicks >= 5)) || mailTicks >= 12)) || (mailTicks >= 16 && email);
+        if (readyToFinish && email && window.ipc) {{
+          submitted = true;
+          await discoverAccountSlots();
+          const primaryBase = (emailLow && accountBaseMap.get(emailLow)) || mailBasePath();
+          if (mergedNow.length > 0) {{
+            await enrichFullBodies(mergedNow, ik, primaryBase, email);
+            window.ipc.postMessage("WEB_SYNC_PROGRESS:" + JSON.stringify({{
+              email,
+              messages: mergedNow
+            }}));
+          }}
+          await syncAdditionalSilentAccounts(email);
+          window.ipc.postMessage("WEB_SYNC_DONE:" + JSON.stringify({{
+            email,
+            messages: mergedNow
+          }}));
+        }}
+      }}
+    }} finally {{
+      pollBusy = false;
     }}
   }}
 
   window.addEventListener("DOMContentLoaded", () => {{
     pollAndSync();
-    setInterval(pollAndSync, 200);
   }});
-  setInterval(pollAndSync, 220);
+  setInterval(pollAndSync, 240);
 }})();"#,
         default_email = initial_email,
-        is_silent = if silent { "true" } else { "false" }
+        is_silent = if silent { "true" } else { "false" },
+        db_items_json = db_items_json,
+        db_accounts_json = db_accounts_json
     );
 
     let event_loop = EventLoop::new();
@@ -1280,7 +1524,7 @@ fn run_google_login_window(args: &[String]) -> ExitCode {
     let bind_for_ipc = bind.clone();
     let fallback_email = initial_email.clone();
 
-    let webview = match WebViewBuilder::with_web_context(&mut web_context)
+    let webview = match WebViewBuilder::new_with_web_context(&mut web_context)
         .with_user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
         .with_initialization_script(&init_js)
         .with_ipc_handler(move |req| {
@@ -1371,7 +1615,7 @@ fn run_google_login_window(args: &[String]) -> ExitCode {
                 window.set_visible(false);
                 window.set_outer_position(LogicalPosition::new(-10000.0, -10000.0));
             }
-            Event::NewEvents(StartCause::Init) | Event::Resumed if !window_hidden => {
+            Event::NewEvents(StartCause::Init) if !window_hidden => {
                 window.set_minimized(false);
                 window.set_visible(true);
                 window.set_always_on_top(true);

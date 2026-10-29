@@ -4,10 +4,27 @@ The AI assistant is optional and disabled by default (`ai.enabled = false`). Cli
 
 ## Setup and storage
 
-- **Ollama / llama.cpp:** use an existing service on a loopback address such as `http://127.0.0.1:11434`. Vortex does not install a model, download weights, or embed an inference runtime.
+- **Ollama / llama.cpp:** use an existing service on a loopback address such as `http://127.0.0.1:11434`. Vortex can ask Ollama to download a supported model when you choose **Download**; it does not install or bundle the inference runtime. llama.cpp models remain manually configured.
 - **OpenAI / Anthropic:** require an HTTPS base endpoint, a model available to your account, and an API key. Keys are saved in the OS keyring, never returned by the settings API or written to TOML.
 - Settings saved in the app, including mailbox consent, persist in local SQLite. Saved AI settings take precedence over the `[ai]` section in `vortex.toml` on subsequent starts.
 - With database encryption enabled, newly written summaries, AI cache responses, and call-log payload excerpts use the existing local field encryption. Previously stored plaintext entries are not rewritten automatically.
+
+## Local model downloads
+
+Install and start [Ollama](https://ollama.com/download) first, then choose **Ollama** in the AI dialog. The optional model chooser offers two small presets:
+
+| Model | Approximate download | License |
+| :--- | :--- | :--- |
+| [Qwen2.5 0.5B](https://ollama.com/library/qwen2.5:0.5b) | 398 MB | Apache 2.0 |
+| [Qwen2.5 1.5B](https://ollama.com/library/qwen2.5:1.5b) | 986 MB | Apache 2.0 |
+
+These multilingual instruction models support Vietnamese and structured JSON. Vortex uses its mail-specific prompt for classification and summaries; the models are not fine-tuned specifically for email. The download sizes cover model files, not the Ollama installation, working RAM, or context buffers. Model quality and runtime memory use have not been benchmarked for your mailbox.
+
+Downloads are explicit and limited to one at a time, with progress, cancel, and manual retry. They send the selected model name to your loopback Ollama service, without email content. Ollama downloads and stores the weights; Vortex does not buffer model files or run an installer. Byte counts and percentages describe the current layer/file, so progress can restart for another layer and reach 100% before checksum verification finishes.
+
+Cancel immediately changes the job to **Canceling**. The request closes on the next progress message or when the current socket read times out; an idle read can delay cancellation by up to 60 seconds. Pull requests have a 30-minute overall deadline. Canceled or failed downloads require a manual retry; [Ollama resumes interrupted pulls and manages partial layers](https://github.com/ollama/ollama/blob/main/docs/api.md#pull-a-model), which Vortex does not delete.
+
+Downloading a model does not load it for inference, enable the assistant, or grant mailbox access. Choose the installed model and save the AI settings separately. The existing custom model field remains available for manually installed models. Download controls load only when requested, keeping the initial UI budget unchanged.
 
 ## Behavior and resource use
 
@@ -50,4 +67,4 @@ External providers (`openai` or `anthropic`) cannot receive messages classified 
 
 ## Validation limits
 
-Automated tests use local fake provider servers and temporary SQLite databases. Live provider credentials, model quality, and end-to-end RSS/latency budgets require measurement on the target machine; the app does not infer those measurements from the asset-size check.
+Automated tests use local fake provider servers and temporary SQLite databases; download tests exchange progress metadata without downloading model weights. Live provider credentials, model quality, and end-to-end RSS/latency budgets require measurement on the target machine; the app does not infer those measurements from the asset-size check.

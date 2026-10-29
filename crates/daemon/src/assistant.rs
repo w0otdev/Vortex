@@ -417,6 +417,7 @@ mod tests {
             ai_generation: 0,
             ai_last_error: None,
             ai_revision: 0,
+            model_downloads: local_models::Downloads::default(),
         }
     }
 

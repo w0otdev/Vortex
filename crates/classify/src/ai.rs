@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::io::{Read, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{IpAddr, TcpStream, ToSocketAddrs};
 use std::time::{Duration, Instant};
 use vortex_core::config::AiConfig;
@@ -8,6 +8,7 @@ use vortex_core::model::{ExtractedEntity, Item, ItemCategory, ItemState};
 use vortex_core::secrets::SecretStore;
 
 pub const EMBEDDING_DIM: usize = 64;
+const OLLAMA_PULL_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AiPayloadPreview {
@@ -532,9 +533,27 @@ pub fn http_post_json(
     extra_headers: &[(String, String)],
     body: &str,
 ) -> Result<String, String> {
+    read_ai_response(open_http_json(
+        "POST",
+        url,
+        extra_headers,
+        body,
+        Duration::from_secs(20),
+        Duration::from_secs(20),
+    )?)
+}
+
+fn open_http_json(
+    method: &str,
+    url: &str,
+    extra_headers: &[(String, String)],
+    body: &str,
+    timeout: Duration,
+    idle_timeout: Duration,
+) -> Result<Box<dyn Read>, String> {
     let (use_tls, host, port, host_port, path) = parse_endpoint_url(url)?;
     let mut hdr_block = format!(
-        "POST {path} HTTP/1.0\r\nHost: {host_port}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n",
+        "{method} {path} HTTP/1.0\r\nHost: {host_port}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n",
         body.len()
     );
     for (k, v) in extra_headers {
@@ -566,20 +585,21 @@ pub fn http_post_json(
     }
     let tcp = DeadlineStream {
         tcp: tcp.ok_or_else(|| format!("AI endpoint connection failed: {host}:{port}"))?,
-        deadline: started + Duration::from_secs(20),
+        deadline: started + timeout,
+        idle_timeout,
     };
     if use_tls {
         let connector = native_tls::TlsConnector::new().map_err(|e| e.to_string())?;
         let mut tls = connector.connect(&host, tcp).map_err(|e| e.to_string())?;
         tls.write_all(hdr_block.as_bytes())
             .map_err(|e| e.to_string())?;
-        read_ai_response(tls)
+        Ok(Box::new(tls))
     } else {
         let mut stream = tcp;
         stream
             .write_all(hdr_block.as_bytes())
             .map_err(|e| e.to_string())?;
-        read_ai_response(stream)
+        Ok(Box::new(stream))
     }
 }
 
@@ -587,6 +607,7 @@ pub fn http_post_json(
 struct DeadlineStream {
     tcp: TcpStream,
     deadline: Instant,
+    idle_timeout: Duration,
 }
 
 impl DeadlineStream {
@@ -594,6 +615,7 @@ impl DeadlineStream {
         self.deadline
             .checked_duration_since(Instant::now())
             .filter(|d| !d.is_zero())
+            .map(|d| d.min(self.idle_timeout))
             .ok_or_else(|| {
                 std::io::Error::new(std::io::ErrorKind::TimedOut, "AI request timed out")
             })
@@ -640,6 +662,19 @@ fn read_ai_response(mut reader: impl Read) -> Result<String, String> {
         .position(|w| w == b"\r\n\r\n")
         .ok_or("malformed HTTP response")?;
     let headers = std::str::from_utf8(&raw[..header_end]).map_err(|e| e.to_string())?;
+    let (chunked, content_length) = response_framing(headers)?;
+    let mut body = raw[header_end + 4..].to_vec();
+    if chunked {
+        body = decode_chunks(&body)?;
+    } else if content_length.is_some_and(|expected| expected != body.len() as u64) {
+        return Err("truncated AI HTTP response".into());
+    }
+    String::from_utf8(body)
+        .map(|text| text.trim().to_string())
+        .map_err(|e| e.to_string())
+}
+
+fn response_framing(headers: &str) -> Result<(bool, Option<u64>), String> {
     let mut status = headers
         .lines()
         .next()
@@ -653,7 +688,6 @@ fn read_ai_response(mut reader: impl Read) -> Result<String, String> {
     if !matches!(version, "HTTP/1.0" | "HTTP/1.1") || !(200..300).contains(&code) {
         return Err(format!("AI HTTP error: {code}"));
     }
-    let mut body = raw[header_end + 4..].to_vec();
     let mut content_length = None;
     let mut chunked = false;
     for line in headers.lines().skip(1) {
@@ -669,19 +703,15 @@ fn read_ai_response(mut reader: impl Read) -> Result<String, String> {
             content_length = Some(
                 value
                     .trim()
-                    .parse::<usize>()
+                    .parse::<u64>()
                     .map_err(|_| "invalid HTTP content length")?,
             );
         }
     }
-    if chunked {
-        body = decode_chunks(&body)?;
-    } else if content_length.is_some_and(|expected| expected != body.len()) {
-        return Err("truncated AI HTTP response".into());
+    if chunked && content_length.is_some() {
+        return Err("ambiguous AI response framing".into());
     }
-    String::from_utf8(body)
-        .map(|text| text.trim().to_string())
-        .map_err(|e| e.to_string())
+    Ok((chunked, content_length))
 }
 
 fn decode_chunks(mut bytes: &[u8]) -> Result<Vec<u8>, String> {
@@ -706,6 +736,233 @@ fn decode_chunks(mut bytes: &[u8]) -> Result<Vec<u8>, String> {
         }
         body.extend_from_slice(&bytes[..size]);
         bytes = &bytes[size + 2..];
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct OllamaPullProgress {
+    pub status: String,
+    #[serde(default)]
+    pub completed: u64,
+    #[serde(default)]
+    pub total: u64,
+}
+
+fn ollama_url(endpoint: &str, route: &str) -> Result<String, String> {
+    validate_ai_config(&AiConfig {
+        endpoint: endpoint.into(),
+        ..Default::default()
+    })?;
+    Ok(format!("{}{route}", endpoint.trim().trim_end_matches('/')))
+}
+
+pub fn list_ollama_models(endpoint: &str) -> Result<Vec<String>, String> {
+    let url = ollama_url(endpoint, "/api/tags")?;
+    let response = read_ai_response(open_http_json(
+        "GET",
+        &url,
+        &[],
+        "",
+        Duration::from_secs(5),
+        Duration::from_secs(5),
+    )?)?;
+    let value: serde_json::Value = serde_json::from_str(&response).map_err(|e| e.to_string())?;
+    value
+        .get("models")
+        .and_then(|v| v.as_array())
+        .ok_or("Missing Ollama model list")?
+        .iter()
+        .map(|model| {
+            model
+                .get("name")
+                .and_then(|v| v.as_str())
+                .filter(|name| name.len() <= 200)
+                .map(str::to_string)
+                .ok_or_else(|| "Invalid Ollama model name".into())
+        })
+        .collect()
+}
+
+pub fn pull_ollama_model(
+    endpoint: &str,
+    model: &str,
+    on_progress: impl FnMut(OllamaPullProgress) -> bool,
+) -> Result<(), String> {
+    let url = ollama_url(endpoint, "/api/pull")?;
+    if model.len() > 100
+        || !model.split_once(':').is_some_and(|(name, tag)| {
+            [name, tag].iter().all(|part| {
+                !part.is_empty()
+                    && part
+                        .bytes()
+                        .all(|c| c.is_ascii_alphanumeric() || b"._-".contains(&c))
+            })
+        })
+    {
+        return Err("Invalid local model tag".into());
+    }
+    let body = serde_json::json!({"model":model,"stream":true}).to_string();
+    let stream = open_http_json(
+        "POST",
+        &url,
+        &[],
+        &body,
+        Duration::from_secs(30 * 60),
+        OLLAMA_PULL_IDLE_TIMEOUT,
+    )?;
+    read_pull_response(stream, on_progress)
+}
+
+fn bounded_line(reader: &mut impl BufRead, limit: usize) -> Result<Vec<u8>, String> {
+    let mut line = Vec::new();
+    reader
+        .take((limit + 1) as u64)
+        .read_until(b'\n', &mut line)
+        .map_err(|e| e.to_string())?;
+    if line.len() > limit {
+        return Err("Ollama response line exceeds its budget".into());
+    }
+    Ok(line)
+}
+
+struct StreamingBody<R> {
+    reader: R,
+    chunked: bool,
+    remaining: Option<u64>,
+    done: bool,
+}
+
+impl<R: BufRead> Read for StreamingBody<R> {
+    fn read(&mut self, output: &mut [u8]) -> std::io::Result<usize> {
+        use std::io::{Error, ErrorKind};
+        if output.is_empty() || self.done {
+            return Ok(0);
+        }
+        if self.chunked && self.remaining == Some(0) {
+            let line = bounded_line(&mut self.reader, 128).map_err(Error::other)?;
+            let line = std::str::from_utf8(&line).map_err(Error::other)?;
+            let size = u64::from_str_radix(
+                line.trim_end_matches("\r\n")
+                    .split(';')
+                    .next()
+                    .unwrap_or_default(),
+                16,
+            )
+            .map_err(Error::other)?;
+            if size == 0 {
+                let mut total = 0;
+                loop {
+                    let line =
+                        bounded_line(&mut self.reader, 8192 - total).map_err(Error::other)?;
+                    if line.is_empty() {
+                        return Err(Error::new(
+                            ErrorKind::UnexpectedEof,
+                            "Truncated HTTP trailer",
+                        ));
+                    }
+                    total += line.len();
+                    if line == b"\r\n" {
+                        break;
+                    }
+                }
+                self.done = true;
+                return Ok(0);
+            }
+            self.remaining = Some(size);
+        }
+        let length = self
+            .remaining
+            .map_or(output.len(), |n| n.min(output.len() as u64) as usize);
+        if length == 0 {
+            self.done = true;
+            return Ok(0);
+        }
+        let n = self.reader.read(&mut output[..length])?;
+        if n == 0 && self.remaining.is_some_and(|n| n > 0) {
+            return Err(Error::new(
+                ErrorKind::UnexpectedEof,
+                "Truncated Ollama response",
+            ));
+        }
+        if let Some(remaining) = &mut self.remaining {
+            *remaining -= n as u64;
+        }
+        if self.chunked && self.remaining == Some(0) {
+            let mut suffix = [0; 2];
+            self.reader.read_exact(&mut suffix)?;
+            if suffix != *b"\r\n" {
+                return Err(Error::new(ErrorKind::InvalidData, "Malformed HTTP chunk"));
+            }
+        }
+        Ok(n)
+    }
+}
+
+fn read_pull_response(
+    reader: impl Read,
+    mut on_progress: impl FnMut(OllamaPullProgress) -> bool,
+) -> Result<(), String> {
+    let mut reader = BufReader::new(reader);
+    let mut headers = Vec::new();
+    loop {
+        let line = bounded_line(&mut reader, 8192 - headers.len())?;
+        if line.is_empty() {
+            return Err("Missing Ollama response headers".into());
+        }
+        if line == b"\r\n" || line == b"\n" {
+            break;
+        }
+        headers.extend(line);
+    }
+    let (chunked, remaining) =
+        response_framing(std::str::from_utf8(&headers).map_err(|e| e.to_string())?)?;
+    let body = StreamingBody {
+        reader,
+        chunked,
+        remaining: if chunked { Some(0) } else { remaining },
+        done: false,
+    };
+    // The stream carries progress metadata; model bytes stay in Ollama's own storage.
+    let mut body = BufReader::new(body);
+    let mut received = 0;
+    loop {
+        let line = bounded_line(&mut body, 16 * 1024)?;
+        received += line.len();
+        if received > 32 * 1024 * 1024 {
+            return Err("Ollama progress exceeds its budget".into());
+        }
+        if line.is_empty() {
+            return Err("Ollama pull ended before success".into());
+        }
+        if line.iter().all(u8::is_ascii_whitespace) {
+            continue;
+        }
+        let value: serde_json::Value = serde_json::from_slice(&line).map_err(|e| e.to_string())?;
+        if let Some(error) = value.get("error").and_then(|v| v.as_str()) {
+            return Err(format!(
+                "Ollama pull failed: {}",
+                error.chars().take(300).collect::<String>()
+            ));
+        }
+        let progress: OllamaPullProgress =
+            serde_json::from_value(value).map_err(|e| e.to_string())?;
+        if progress.status.is_empty() || progress.status.len() > 500 {
+            return Err("Invalid Ollama pull status".into());
+        }
+        let success = progress.status == "success";
+        if !on_progress(progress) {
+            return Err("Ollama pull canceled".into());
+        }
+        if success {
+            let mut trailing = Vec::new();
+            body.take(16 * 1024 + 1)
+                .read_to_end(&mut trailing)
+                .map_err(|e| e.to_string())?;
+            if trailing.len() > 16 * 1024 || !trailing.iter().all(u8::is_ascii_whitespace) {
+                return Err("Unexpected data after Ollama pull success".into());
+            }
+            return Ok(());
+        }
     }
 }
 
@@ -1095,6 +1352,7 @@ mod tests {
         let mut stream = DeadlineStream {
             tcp: TcpStream::connect(listener.local_addr().unwrap()).unwrap(),
             deadline: Instant::now() - Duration::from_secs(1),
+            idle_timeout: Duration::from_secs(20),
         };
         assert_eq!(
             stream.read(&mut [0]).unwrap_err().kind(),
@@ -1104,5 +1362,115 @@ mod tests {
             stream.write(b"mail").unwrap_err().kind(),
             std::io::ErrorKind::TimedOut
         );
+        stream.deadline = Instant::now() + Duration::from_secs(30 * 60);
+        stream.idle_timeout = OLLAMA_PULL_IDLE_TIMEOUT;
+        assert_eq!(stream.remaining().unwrap(), Duration::from_secs(60));
+        stream.deadline = Instant::now() + Duration::from_secs(1);
+        assert!(stream.remaining().unwrap() <= Duration::from_secs(1));
+    }
+
+    #[test]
+    fn ollama_local_catalog_and_pull_use_native_api_without_enabling_ai() {
+        let (endpoint, worker) =
+            fake_endpoint(r#"{"models":[{"name":"qwen2.5:0.5b"},{"name":"qwen2.5:1.5b"}]}"#.into());
+        assert_eq!(
+            list_ollama_models(&endpoint).unwrap(),
+            ["qwen2.5:0.5b", "qwen2.5:1.5b"]
+        );
+        assert!(worker.join().unwrap().starts_with("GET /api/tags HTTP/1.0"));
+
+        let (endpoint, worker) = fake_endpoint(
+            concat!(
+                "{\"status\":\"pulling manifest\"}\n",
+                "{\"status\":\"pulling sha256:abc\",\"completed\":25,\"total\":100}\n",
+                "{\"status\":\"success\"}\n",
+            )
+            .into(),
+        );
+        let mut progress = Vec::new();
+        pull_ollama_model(&endpoint, "qwen2.5:0.5b", |event| {
+            progress.push(event);
+            true
+        })
+        .unwrap();
+        assert_eq!(progress[1].completed, 25);
+        assert_eq!(progress[1].total, 100);
+        assert_eq!(progress.last().unwrap().status, "success");
+        let request = worker.join().unwrap();
+        assert!(request.starts_with("POST /api/pull HTTP/1.0"));
+        let body: serde_json::Value =
+            serde_json::from_str(request.split_once("\r\n\r\n").unwrap().1).unwrap();
+        assert_eq!(
+            body,
+            serde_json::json!({"model":"qwen2.5:0.5b","stream":true})
+        );
+        assert!(list_ollama_models("http://example.com").is_err());
+        for tag in [
+            "https://evil/model",
+            "../model:tag",
+            "model:tag\r\n",
+            "model",
+            "model:",
+        ] {
+            assert!(pull_ollama_model("http://127.0.0.1:9", tag, |_| true).is_err());
+        }
+    }
+
+    #[test]
+    fn streamed_ollama_pull_handles_chunks_partial_reads_and_cancellation() {
+        let payload = concat!(
+            "{\"status\":\"pulling manifest\"}\n",
+            "{\"status\":\"success\"}\n"
+        );
+        let mut response = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n".to_vec();
+        for chunk in payload.as_bytes().chunks(7) {
+            response.extend(format!("{:x}\r\n", chunk.len()).as_bytes());
+            response.extend(chunk);
+            response.extend(b"\r\n");
+        }
+        response.extend(b"0\r\n\r\n");
+        struct TinyReads<'a>(&'a [u8]);
+        impl Read for TinyReads<'_> {
+            fn read(&mut self, bytes: &mut [u8]) -> std::io::Result<usize> {
+                let length = bytes.len().min(3);
+                self.0.read(&mut bytes[..length])
+            }
+        }
+        let mut statuses = Vec::new();
+        read_pull_response(TinyReads(&response), |event| {
+            statuses.push(event.status);
+            true
+        })
+        .unwrap();
+        assert_eq!(statuses, ["pulling manifest", "success"]);
+        assert!(
+            read_pull_response(response.as_slice(), |_| false)
+                .unwrap_err()
+                .contains("canceled")
+        );
+    }
+
+    #[test]
+    fn streamed_ollama_pull_rejects_errors_incomplete_success_and_oversize_lines() {
+        for body in [
+            r#"{"error":"not enough disk space"}"#.to_string(),
+            r#"{"status":"pulling manifest"}"#.to_string(),
+            r#"{"status":"success"}garbage"#.to_string(),
+            format!("{{\"status\":\"{}\"}}", "x".repeat(16 * 1024)),
+        ] {
+            let response = format!("HTTP/1.0 200 OK\r\n\r\n{body}");
+            assert!(read_pull_response(response.as_bytes(), |_| true).is_err());
+        }
+        for response in [
+            "HTTP/1.1 200 OK\r\nContent-Length: 999\r\n\r\n{\"status\":\"success\"}\n",
+            "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n15\r\n{\"status\":\"success\"}\n\r\n",
+            "HTTP/1.1 404 Not Found\r\n\r\n{\"status\":\"success\"}\n",
+            "HTTP/1.1 200 OK\r\nContent-Length: 21\r\nTransfer-Encoding: chunked\r\n\r\n",
+        ] {
+            assert!(
+                read_pull_response(response.as_bytes(), |_| true).is_err(),
+                "{response}"
+            );
+        }
     }
 }

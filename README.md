@@ -79,7 +79,7 @@
   <tr>
     <td align="center" valign="top" colspan="2">
       <b>Optional AI assistant</b><br>
-      <sub>Opt in per mailbox for message summaries, priority sorting, and reversible auto-hiding of confirmed promotions. Connect an existing Ollama / llama.cpp service or OpenAI / Anthropic account. Disabled by default, with no bundled model or new runtime dependency.</sub>
+      <sub>Opt in per mailbox for message summaries, priority sorting, and reversible auto-hiding of confirmed promotions. Download optional local model presets through Ollama, connect llama.cpp, or use OpenAI / Anthropic. Disabled by default, with no bundled model or new runtime dependency.</sub>
     </td>
   </tr>
 </table>
@@ -101,10 +101,13 @@
 | Click category pill | Filter stream by All, OTP, Billing, Orders, Security, Work, or Promotions |
 | Click `Auto-sort` | Pin active OTP codes and unread messages to the top of the stream |
 | Click `AI` | Enable the optional assistant, choose a provider/model, and select allowed mailboxes |
+| `AI` → `Ollama` → local model download | Download Qwen2.5 0.5B (~398 MB) or 1.5B (~986 MB), with progress and cancel; requires installed, running Ollama |
 | Click `Summarize with AI` | Analyze an existing message; new arrivals in opted-in mailboxes are analyzed automatically |
 | Enable `Auto-hide promotions` | Locally archive promotions only when the classifier and model agree with high confidence |
 | Open `Hidden by AI` → `Restore message` | Restore the message and exempt it from future automatic hiding |
 | Click speaker / theme / language | Toggle tactile audio feedback, Light / Dark theme, or Vietnamese / English UI |
+
+Local presets use general multilingual models with Vortex's mail-classification prompt. Downloads remain optional and do not enable AI or grant mailbox access. Model file sizes exclude runtime and RAM requirements; see [AI Privacy](docs/AI_PRIVACY.md#local-model-downloads) for model sources and setup.
 
 <details>
 <summary><strong>CLI commands</strong></summary>

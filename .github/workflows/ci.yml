@@ -40,18 +40,6 @@ jobs:
             os: windows-latest
             bin: vortex.exe
             can_run: false
-          - target: x86_64-unknown-linux-musl
-            os: ubuntu-latest
-            bin: vortex
-            can_run: true
-          - target: aarch64-unknown-linux-musl
-            os: ubuntu-latest
-            bin: vortex
-            can_run: false
-          - target: armv7-unknown-linux-musleabihf
-            os: ubuntu-latest
-            bin: vortex
-            can_run: false
           - target: x86_64-apple-darwin
             os: macos-14
             bin: vortex
@@ -66,20 +54,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
-      - name: Install Linux musl cross toolchains
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y musl-tools perl make
-          if [ "${{ matrix.target }}" = "aarch64-unknown-linux-musl" ]; then
-            (curl -fsSL --retry 3 https://musl.cc/aarch64-linux-musl-cross.tgz || curl -fsSL --retry 3 https://more.musl.cc/10/x86_64-linux-musl/aarch64-linux-musl-cross.tgz) | sudo tar -xz -C /opt
-            echo "/opt/aarch64-linux-musl-cross/bin" >> "$GITHUB_PATH"
-            echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=aarch64-linux-musl-gcc" >> "$GITHUB_ENV"
-          elif [ "${{ matrix.target }}" = "armv7-unknown-linux-musleabihf" ]; then
-            (curl -fsSL --retry 3 https://musl.cc/arm-linux-musleabihf-cross.tgz || curl -fsSL --retry 3 https://more.musl.cc/10/x86_64-linux-musl/arm-linux-musleabihf-cross.tgz) | sudo tar -xz -C /opt
-            echo "/opt/arm-linux-musleabihf-cross/bin" >> "$GITHUB_PATH"
-            echo "CARGO_TARGET_ARMV7_UNKNOWN_LINUX_MUSLEABIHF_LINKER=arm-linux-musleabihf-gcc" >> "$GITHUB_ENV"
-          fi
       - name: Build release binary
         run: cargo build --release --target ${{ matrix.target }} -p vortex-cli
       - name: Check binary size gate (all targets <= 6 MB)
