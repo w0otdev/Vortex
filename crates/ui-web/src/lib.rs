@@ -299,6 +299,12 @@ html.theme-transitioning, html.theme-transitioning *, html.theme-transitioning *
 .phishing-box { flex-shrink: 0; margin-top: 10px; padding: 10px 14px; background-color: var(--bg-alert); border: 1px solid var(--border-danger); border-radius: var(--radius-base); color: var(--text-danger); font-size: 0.875rem; display: flex; align-items: center; gap: 10px; }
 .reader-html-frame { flex: 1 1 0%; min-height: 0; width: 100%; border: none; margin-top: 8px; background-color: var(--bg-surface); }
 .reader-body { flex: 1 1 0%; min-height: 0; overflow-y: auto; overscroll-behavior: contain; margin-top: 14px; white-space: pre-wrap; overflow-wrap: break-word; font-size: 0.96875rem; line-height: 1.68; color: var(--text-primary); }
+.ai-dialog { margin: auto; width: min(480px, calc(100% - 32px)); max-height: calc(100dvh - 32px); overflow-y: auto; background: var(--bg-surface); color: var(--text-primary); border: 1px solid var(--border-subtle); border-radius: 20px; padding: 24px; box-shadow: var(--glass-shadow); }
+.ai-dialog::backdrop { background: var(--bg-backdrop); }
+.ai-check { display: flex; align-items: center; gap: 8px; font-size: .875rem; overflow-wrap: anywhere; }
+.ai-check input { flex-shrink: 0; accent-color: var(--text-primary); }
+#aiAccounts { display: grid; gap: 8px; }
+.ai-summary { border: 1px solid var(--border-subtle); background: var(--bg-notice); border-radius: var(--radius-base); padding: 12px; margin-top: 12px; white-space: pre-wrap; overflow-wrap: anywhere; font-size: .875rem; max-height: 180px; overflow-y: auto; }
 .toast-bar { position: fixed; right: 20px; bottom: 20px; z-index: 900; background-color: var(--bg-inverse); color: var(--text-inverse); padding: 10px 16px; border-radius: var(--radius-base); font-size: 0.875rem; font-weight: 700; display: inline-flex; align-items: center; gap: 8px; transform: translateY(16px); opacity: 0; pointer-events: none; transition: transform 200ms cubic-bezier(0.22, 1, 0.36, 1), opacity 200ms ease; }
 .toast-bar.is-visible { transform: translateY(0); opacity: 1; }
 .hidden { display: none !important; }
@@ -479,6 +485,7 @@ pub const INDEX_HTML: &str = r##"<!doctype html>
         </button>
       </div>
       <div class="language-controls glass-pill">
+        <button id="btnAiSettings" type="button" class="btn btn-ghost" aria-haspopup="dialog" aria-label="Trợ lý AI" title="Trợ lý AI">AI</button>
         <button id="btnSfx" type="button" class="btn btn-ghost" aria-label="Âm thanh: Bật" title="Âm thanh: Bật">
           <svg class="hi-icon" aria-hidden="true"><use id="sfxIconUse" href="#hi-speaker-wave"></use></svg>
         </button>
@@ -505,6 +512,21 @@ pub const INDEX_HTML: &str = r##"<!doctype html>
     </header>
 
     <!-- SCREEN 1: Account Management & Multi-Account Onboarding View -->
+    <dialog id="aiDialog" class="ai-dialog" aria-labelledby="aiTitle">
+      <div class="onboarding-head"><h2 id="aiTitle" data-i18n="ai_assistant">Trợ lý AI</h2><button id="btnAiClose" type="button" class="btn btn-ghost" data-i18n="ai_close">Đóng</button></div>
+      <p class="field-hint" data-i18n="ai_privacy">Tắt mặc định. Chỉ xử lý hộp thư bạn chọn; dùng dịch vụ AI bên ngoài sẽ gửi nội dung đã che thông tin nhạy cảm đến dịch vụ đó.</p>
+      <form id="aiForm" class="form-stack">
+        <label class="ai-check"><input id="aiEnabled" type="checkbox"><span data-i18n="ai_enable">Bật trợ lý AI</span></label>
+        <label class="ai-check"><input id="aiAutoHide" type="checkbox"><span data-i18n="ai_hide">Tự ẩn thư quảng cáo chắc chắn, có thể khôi phục</span></label>
+        <div><label for="aiProvider" class="field-label" data-i18n="ai_provider">Dịch vụ</label><select id="aiProvider" class="input-field"><option value="ollama">Ollama</option><option value="llamacpp">llama.cpp</option><option value="openai">OpenAI compatible</option><option value="anthropic">Anthropic</option></select></div>
+        <div><label for="aiEndpoint" class="field-label" data-i18n="ai_endpoint">Địa chỉ dịch vụ</label><input id="aiEndpoint" type="url" class="input-field" required></div>
+        <div><label for="aiModel" class="field-label" data-i18n="ai_model">Mô hình</label><input id="aiModel" class="input-field" required maxlength="200"></div>
+        <div id="aiKeyField"><label for="aiKey" class="field-label" data-i18n="ai_key">API key (để trống để giữ khóa đã lưu)</label><input id="aiKey" type="password" class="input-field" autocomplete="new-password"></div>
+        <div><p class="field-label" data-i18n="ai_mailboxes">Hộp thư cho phép AI xử lý</p><div id="aiAccounts"></div></div>
+        <p id="aiSettingsStatus" class="field-hint" role="status"></p>
+        <button id="btnAiSave" class="btn btn-primary" type="submit" data-i18n="ai_save">Lưu cài đặt</button>
+      </form>
+    </dialog>
     <section id="onboardingView" class="onboarding-wrap hidden" aria-label="Thêm hộp thư">
       <div class="onboarding-head">
         <div>
@@ -647,6 +669,7 @@ pub const INDEX_HTML: &str = r##"<!doctype html>
             <span data-i18n="cat_promo">Khuyến mãi</span>
             <span id="cnt_promo_newsletter" class="cat-count"></span>
           </button>
+          <button type="button" class="cat-btn" data-cat="__hidden" aria-pressed="false"><svg class="hi-icon" aria-hidden="true"><use href="#hi-archive-box"></use></svg><span data-i18n="ai_hidden">AI đã ẩn</span></button>
         </nav>
         <div class="filter-bar-right">
           <span id="statusNotice" class="otp-meta" role="status"></span>
@@ -683,6 +706,8 @@ pub const INDEX_HTML: &str = r##"<!doctype html>
               <span id="readerPhishingText"></span>
             </div>
             <div id="readerActions" class="reader-actions">
+              <button id="btnAiSummary" type="button" class="btn hidden" data-i18n="ai_summarize">Tóm tắt bằng AI</button>
+              <button id="btnAiRestore" type="button" class="btn hidden" data-i18n="ai_restore">Khôi phục thư</button>
               <button type="button" class="btn" data-act="archive">
                 <svg class="hi-icon" aria-hidden="true"><use href="#hi-archive-box"></use></svg>
                 <span data-i18n="act_archive">Lưu trữ</span>
@@ -702,6 +727,7 @@ pub const INDEX_HTML: &str = r##"<!doctype html>
                 <span data-i18n="act_delete">Xóa</span>
               </button>
             </div>
+            <div id="readerAiSummary" class="ai-summary hidden" role="status" aria-live="polite"></div>
             <iframe id="readerHtmlFrame" class="reader-html-frame hidden" sandbox="allow-popups allow-popups-to-escape-sandbox" title="Nội dung email"></iframe>
             <div id="readerBody" class="reader-body"></div>
           </div>
@@ -761,6 +787,13 @@ pub const APP_JS: &str = r##"(() => {
       cat_work: "Công việc",
       cat_promo: "Khuyến mãi",
       auto_sort: "Tự động sắp xếp",
+      ai_assistant: "Trợ lý AI", ai_enable: "Bật trợ lý AI", ai_close: "Đóng", ai_save: "Lưu cài đặt",
+      ai_privacy: "Tắt mặc định. Chỉ xử lý hộp thư bạn chọn; dùng dịch vụ AI bên ngoài sẽ gửi nội dung đã che thông tin nhạy cảm đến dịch vụ đó.",
+      ai_hide: "Tự ẩn thư quảng cáo chắc chắn, có thể khôi phục", ai_provider: "Dịch vụ", ai_endpoint: "Địa chỉ dịch vụ", ai_model: "Mô hình",
+      ai_key: "API key (để trống để giữ khóa đã lưu)", ai_mailboxes: "Hộp thư cho phép AI xử lý", ai_hidden: "AI đã ẩn", ai_restore: "Khôi phục thư",
+      ai_summarize: "Tóm tắt bằng AI", ai_pending: "AI đang xử lý…", ai_saved: "Đã lưu cài đặt AI", ai_paused: "AI tạm dừng theo giới hạn thiết bị hoặc pin.",
+      ai_timeout: "Chưa có kết quả. Bấm tóm tắt để kiểm tra lại.", ai_key_saved: "Đã lưu khóa trong kho bảo mật của hệ điều hành.",
+      ai_summary_label: "Tóm tắt",
       theme_dark: "Tối",
       theme_light: "Sáng",
       theme_toggle_tip: "Đổi giao diện Sáng / Tối",
@@ -822,6 +855,13 @@ pub const APP_JS: &str = r##"(() => {
       cat_work: "Work",
       cat_promo: "Promotions",
       auto_sort: "Auto-sort",
+      ai_assistant: "AI assistant", ai_enable: "Enable AI assistant", ai_close: "Close", ai_save: "Save settings",
+      ai_privacy: "Off by default. Only processes selected mailboxes. External AI services receive message content with sensitive details redacted.",
+      ai_hide: "Automatically hide confident promotions; always recoverable", ai_provider: "Provider", ai_endpoint: "Service endpoint", ai_model: "Model",
+      ai_key: "API key (leave blank to keep saved key)", ai_mailboxes: "Mailboxes AI may process", ai_hidden: "AI hidden", ai_restore: "Restore message",
+      ai_summarize: "Summarize with AI", ai_pending: "AI is working…", ai_saved: "AI settings saved", ai_paused: "AI paused by device or battery limits.",
+      ai_timeout: "Still processing. Click summarize to check again.", ai_key_saved: "Key saved in the operating system credential store.",
+      ai_summary_label: "Summary",
       theme_dark: "Dark",
       theme_light: "Light",
       theme_toggle_tip: "Switch Light / Dark theme",
@@ -885,7 +925,6 @@ pub const APP_JS: &str = r##"(() => {
     }
   } catch (_) {}
 
-  const CUSTOM_SFX_B64 = "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";
   let audioCtx = null, customSfxBuffer = null, customSfxLoading = false, sfxFallbackAudio = null, lastSfxAt = 0;
   function ensureAudioCtx() {
     if (!audioCtx) {
@@ -897,16 +936,14 @@ pub const APP_JS: &str = r##"(() => {
     if (!customSfxBuffer && !customSfxLoading && audioCtx) {
       customSfxLoading = true;
       try {
-        const bin = atob(CUSTOM_SFX_B64), bytes = new Uint8Array(bin.length);
-        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-        audioCtx.decodeAudioData(bytes.buffer.slice(0), (d) => { customSfxBuffer = d; }, () => {});
+        fetch("/click.m4a").then((r) => r.arrayBuffer()).then((bytes) => audioCtx.decodeAudioData(bytes)).then((d) => { customSfxBuffer = d; }).catch(() => {});
       } catch (_) {}
     }
     return audioCtx;
   }
   function playSampleSlice(ctx, offsetSec, durSec, rate, gainVal, delaySec = 0) {
     if (!customSfxBuffer) {
-      if (!sfxFallbackAudio) sfxFallbackAudio = new Audio("data:audio/mp4;base64," + CUSTOM_SFX_B64);
+      if (!sfxFallbackAudio) sfxFallbackAudio = new Audio("/click.m4a");
       const clone = sfxFallbackAudio.cloneNode();
       clone.volume = Math.min(1, gainVal); clone.playbackRate = rate; clone.play().catch(() => {});
       return;
@@ -980,6 +1017,9 @@ pub const APP_JS: &str = r##"(() => {
   let autoEnrichedOnce = false;
   let syncInFlight = false;
   let autoSortEnabled = false;
+  let aiSettings = { enabled: false, accounts: [] };
+  let aiSummaryTimer = null;
+  let aiSummaryId = null;
   let prevCatIndex = 0;
   let catMorphTimer = null;
   let lastStreamMorphAt = 0;
@@ -1202,6 +1242,7 @@ pub const APP_JS: &str = r##"(() => {
       const aUnread = a.state === "unread";
       const bUnread = b.state === "unread";
       if (aUnread !== bUnread) return aUnread ? -1 : 1;
+      if ((a.priority_score || 0) !== (b.priority_score || 0)) return (b.priority_score || 0) - (a.priority_score || 0);
       const aRank = catRank[a.category] !== undefined ? catRank[a.category] : 1;
       const bRank = catRank[b.category] !== undefined ? catRank[b.category] : 1;
       if (aRank !== bRank) return bRank - aRank;
@@ -1249,6 +1290,8 @@ pub const APP_JS: &str = r##"(() => {
 
   function applyTranslations() {
     document.documentElement.lang = lang;
+    $("btnAiSettings").setAttribute("aria-label", t("ai_assistant"));
+    $("btnAiSettings").title = t("ai_assistant");
     $("btnLang").setAttribute("aria-label", lang === "vi" ? "Switch to English" : "Chuyển sang tiếng Việt");
     $("btnSync").setAttribute("aria-label", t("sync_now"));
     $("btnSync").title = t("sync_now");
@@ -1293,6 +1336,50 @@ pub const APP_JS: &str = r##"(() => {
     return res.json();
   }
 
+  function updateAiReader(item) {
+    const enabled = aiSettings.enabled && aiSettings.accounts.includes(item.account);
+    $("btnAiSummary").classList.toggle("hidden", !enabled);
+    $("btnAiRestore").classList.toggle("hidden", activeCategory !== "__hidden");
+    if (!enabled || aiSummaryId !== item.id) {
+      clearTimeout(aiSummaryTimer);
+      aiSummaryId = null;
+      const summary = enabled && item.summary ? `${t("ai_summary_label")}: ${item.summary}` : "";
+      $("readerAiSummary").textContent = summary;
+      $("readerAiSummary").classList.toggle("hidden", !summary);
+    }
+  }
+
+  function updateAiKeyField() {
+    const external = ["openai", "anthropic"].includes($("aiProvider").value);
+    $("aiKey").disabled = !external;
+    $("aiKeyField").classList.toggle("hidden", !external);
+  }
+
+  async function loadAiSettings() {
+    aiSettings = await api("/api/ai/settings");
+    const item = items.find((it) => it.id === selectedId);
+    if (item) updateAiReader(item);
+    return aiSettings;
+  }
+
+  async function pollAiSummary(id, attempt = 0) {
+    if (selectedId !== id || aiSummaryId !== id) return;
+    const box = $("readerAiSummary");
+    try {
+      const result = await api(`/api/ai/result?item_id=${id}`);
+      if (selectedId !== id || aiSummaryId !== id) return;
+      if (result.status === "pending" && attempt < 60) {
+        aiSummaryTimer = setTimeout(() => pollAiSummary(id, attempt + 1), 1000);
+      } else if (result.status === "done") {
+        box.textContent = result.summary ? `${t("ai_summary_label")}: ${result.summary}` : "";
+      } else {
+        box.textContent = result.last_error || t("ai_timeout");
+      }
+    } catch (err) {
+      if (selectedId === id && aiSummaryId === id) box.textContent = err.message;
+    }
+  }
+
   function updateCategoryCounts(allItems) {
     const scoped = activeAccount
       ? allItems.filter((it) => it.account === activeAccount)
@@ -1326,7 +1413,8 @@ pub const APP_JS: &str = r##"(() => {
   async function loadAll(forceStreamAnim = false) {
     try {
       const qs = [];
-      if (activeCategory) qs.push(`category=${encodeURIComponent(activeCategory)}`);
+      if (activeCategory === "__hidden") qs.push("hidden=1");
+      else if (activeCategory) qs.push(`category=${encodeURIComponent(activeCategory)}`);
       if (activeAccount) qs.push(`account=${encodeURIComponent(activeAccount)}`);
       const filterUrl = "/api/items" + (qs.length ? `?${qs.join("&")}` : "");
 
@@ -1337,8 +1425,9 @@ pub const APP_JS: &str = r##"(() => {
         api(filterUrl),
         api("/api/codes")
       ]);
+      lastKnownAiRevision = status.ai_revision;
       const allItems = rawAllItems.filter(isItemVisible);
-      const filteredList = rawFilteredList.filter(isItemVisible);
+      const filteredList = activeCategory === "__hidden" ? rawFilteredList : rawFilteredList.filter(isItemVisible);
       const codes = rawCodes.filter((c) => !hiddenItemKeys.has(`id:${c.item_id}`));
       accounts = accs;
       if (activeAccount && !accounts.some((a) => a.id === activeAccount)) {
@@ -1597,7 +1686,7 @@ pub const APP_JS: &str = r##"(() => {
   }
   function renderStream(force = false) {
     const ul = $("streamList");
-    const nextKey = items.map((i) => `${i.id}:${i.state}:${i.pinned ? 1 : 0}:${(i.subject || "").length}:${(i.body_text || "").length}:${(i.body_html || "").length}`).join("|");
+    const nextKey = items.map((i) => `${i.id}:${i.state}:${i.pinned ? 1 : 0}:${i.summary || ""}:${(i.subject || "").length}:${(i.body_text || "").length}:${(i.body_html || "").length}`).join("|");
     if (!force && nextKey === lastStreamKey && ul.children.length > 0) { updateStreamSelectionAttr(); return; }
     lastStreamKey = nextKey;
     ul.innerHTML = "";
@@ -1802,8 +1891,19 @@ pub const APP_JS: &str = r##"(() => {
     if (/<[a-z!][\s\S]*>/i.test(bodyContent)) {
       try {
         const doc = new DOMParser().parseFromString(bodyContent, "text/html");
-        doc.querySelectorAll("script,style,head,meta,title,link,[style*='display:none'],[style*='visibility:hidden']").forEach((n) => n.remove());
+        doc.querySelectorAll("script,style,head,meta,title,link,iframe,object,embed,svg,math,form,base,template,[hidden],[style*='display:none'],[style*='visibility:hidden']").forEach((n) => n.remove());
         if (doc.body) {
+          doc.body.querySelectorAll("*").forEach((el) => {
+            Array.from(el.attributes || []).forEach((attr) => {
+              const an = attr.name.toLowerCase();
+              const av = String(attr.value || "").trim();
+              if (an.startsWith("on") || an === "srcdoc" || an === "formaction") {
+                el.removeAttribute(attr.name);
+              } else if ((an === "href" || an === "src") && !/^(?:https?:\/\/|mailto:|#|cid:)/i.test(av)) {
+                el.removeAttribute(attr.name);
+              }
+            });
+          });
           normalizeEmailDom(doc.body, isDark);
           if (doc.body.innerHTML.trim()) bodyContent = doc.body.innerHTML.trim();
         }
@@ -1865,6 +1965,7 @@ pub const APP_JS: &str = r##"(() => {
     updateStreamSelectionAttr();
     const item = items.find((i) => i.id === id);
     if (!item) return;
+    updateAiReader(item);
     if (openMobile) {
       $("inboxGrid").classList.add("has-mobile-reader");
     }
@@ -1919,9 +2020,12 @@ pub const APP_JS: &str = r##"(() => {
       phish.classList.add("hidden");
     }
     const unsubBtn = $("btnUnsubscribe");
-    if (item.unsubscribe_link) {
+    const safeUnsubUrl = item.unsubscribe_link && /^(?:https?:\/\/|mailto:)/i.test(String(item.unsubscribe_link).trim())
+      ? String(item.unsubscribe_link).trim()
+      : null;
+    if (safeUnsubUrl) {
       unsubBtn.classList.remove("hidden");
-      unsubBtn.onclick = () => window.open(item.unsubscribe_link, "_blank", "noopener,noreferrer");
+      unsubBtn.onclick = () => window.open(safeUnsubUrl, "_blank", "noopener,noreferrer");
     } else {
       unsubBtn.classList.add("hidden");
     }
@@ -1929,7 +2033,10 @@ pub const APP_JS: &str = r##"(() => {
     const bodyTextClean = cleanBodyText(item.subject, item.body_text || "");
     const linkBtn = $("btnOpenBodyLink");
     const firstUrlMatch = bodyTextClean.match(/https?:\/\/[^\s"'<>)]+/);
-    const actionLink = (item.extracted_links && item.extracted_links[0] && item.extracted_links[0].url) || (firstUrlMatch && firstUrlMatch[0]);
+    const rawActionLink = (item.extracted_links && item.extracted_links[0] && item.extracted_links[0].url) || (firstUrlMatch && firstUrlMatch[0]);
+    const actionLink = rawActionLink && /^https?:\/\//i.test(String(rawActionLink).trim())
+      ? String(rawActionLink).trim()
+      : null;
     if (actionLink && !item.phishing_warning) {
       linkBtn.classList.remove("hidden");
       linkBtn.onclick = () => window.open(actionLink, "_blank", "noopener,noreferrer");
@@ -1981,7 +2088,6 @@ pub const APP_JS: &str = r##"(() => {
         $("readerEmptyState").classList.remove("hidden");
       }
       renderStream(true);
-      renderRecentCodes();
     }
     await api("/api/actions", {
       method: "POST",
@@ -2002,6 +2108,72 @@ pub const APP_JS: &str = r##"(() => {
     $("inboxGrid").classList.remove("has-mobile-reader");
   };
 
+  $("btnAiSettings").onclick = async () => {
+    const btn = $("btnAiSettings");
+    btn.disabled = true;
+    try {
+      const cfg = await loadAiSettings();
+      $("aiEnabled").checked = cfg.enabled;
+      $("aiAutoHide").checked = cfg.auto_hide;
+      $("aiProvider").value = cfg.provider;
+      $("aiEndpoint").value = cfg.endpoint;
+      $("aiModel").value = cfg.small_model;
+      $("aiKey").value = "";
+      updateAiKeyField();
+      $("aiSettingsStatus").textContent = cfg.last_error || (cfg.enabled && !cfg.allowed_now ? t("ai_paused") : cfg.has_api_key ? t("ai_key_saved") : "");
+      const list = $("aiAccounts");
+      list.replaceChildren();
+      if (!accounts.length) list.textContent = t("add_account_menu");
+      accounts.forEach((acc) => {
+        const label = document.createElement("label"); label.className = "ai-check";
+        const check = document.createElement("input"); check.type = "checkbox"; check.value = acc.id; check.checked = cfg.accounts.includes(acc.id);
+        label.append(check, document.createTextNode(acc.email_or_handle)); list.appendChild(label);
+      });
+      $("aiDialog").showModal();
+    } catch (err) { showToast(err.message); }
+    finally { btn.disabled = false; }
+  };
+  $("btnAiClose").onclick = () => { $("aiKey").value = ""; $("aiDialog").close(); };
+  $("aiDialog").addEventListener("close", () => { $("aiKey").value = ""; });
+  $("aiProvider").onchange = () => {
+    const defaults = { ollama: ["http://127.0.0.1:11434", "qwen2.5:1.5b"], llamacpp: ["http://127.0.0.1:8080", "local"], openai: ["https://api.openai.com", ""], anthropic: ["https://api.anthropic.com", ""] };
+    const value = defaults[$("aiProvider").value];
+    if (value) { $("aiEndpoint").value = value[0]; $("aiModel").value = value[1]; }
+    updateAiKeyField();
+  };
+  $("aiForm").onsubmit = async (event) => {
+    event.preventDefault();
+    const btn = $("btnAiSave"); btn.disabled = true;
+    const payload = { enabled: $("aiEnabled").checked, auto_hide: $("aiAutoHide").checked, provider: $("aiProvider").value, endpoint: $("aiEndpoint").value.trim(), small_model: $("aiModel").value.trim(), accounts: Array.from($("aiAccounts").querySelectorAll("input:checked"), (el) => el.value) };
+    if (!$("aiKey").disabled && $("aiKey").value.trim()) payload.api_key = $("aiKey").value.trim();
+    try {
+      aiSettings = await api("/api/ai/settings", { method: "POST", body: JSON.stringify(payload) });
+      $("aiKey").value = "";
+      $("aiDialog").close(); showToast(t("ai_saved"));
+      await loadAll();
+    } catch (err) { $("aiSettingsStatus").textContent = err.message; }
+    finally { btn.disabled = false; }
+  };
+  $("btnAiSummary").onclick = async () => {
+    if (!selectedId) return;
+    const id = selectedId, btn = $("btnAiSummary"), box = $("readerAiSummary");
+    btn.disabled = true; clearTimeout(aiSummaryTimer); aiSummaryId = id;
+    box.classList.remove("hidden"); box.textContent = t("ai_pending");
+    try {
+      await api("/api/ai/summarize", { method: "POST", body: JSON.stringify({ id }) });
+      await pollAiSummary(id);
+    } catch (err) { if (selectedId === id) box.textContent = err.message; }
+    finally { btn.disabled = false; }
+  };
+  $("btnAiRestore").onclick = async () => {
+    const id = selectedId;
+    if (!id) return;
+    try {
+      await api("/api/ai/restore", { method: "POST", body: JSON.stringify({ id }) });
+      await loadAll();
+    } catch (err) { showToast(err.message); }
+  };
+
   $("btnModeSingle").onclick = () => setAddMode("single");
   $("btnModeBulk").onclick = () => setAddMode("bulk");
 
@@ -2019,6 +2191,7 @@ pub const APP_JS: &str = r##"(() => {
   let googlePollTimer = null;
   let lastKnownAccCount = -1;
   let lastKnownItemsCount = -1;
+  let lastKnownAiRevision = null;
 
   $("btnGoogleLogin").onclick = async () => {
     $("setupErrorBox").classList.add("hidden");
@@ -2337,8 +2510,9 @@ pub const APP_JS: &str = r##"(() => {
         return;
       }
       const accParam = activeAccount ? `&account=${encodeURIComponent(activeAccount)}` : "";
-      const searched = await api(`/api/items?q=${encodeURIComponent(q)}${accParam}`);
-      items = sortItemsList(searched.filter(isItemVisible));
+      const hiddenParam = activeCategory === "__hidden" ? "&hidden=1" : "";
+      const searched = await api(`/api/items?q=${encodeURIComponent(q)}${accParam}${hiddenParam}`);
+      items = sortItemsList(activeCategory === "__hidden" ? searched : searched.filter(isItemVisible));
       renderStream();
     }, 180);
   };
@@ -2400,8 +2574,10 @@ pub const APP_JS: &str = r##"(() => {
       const st = await api("/api/status");
       const accChanged = lastKnownAccCount !== -1 && st.accounts_count !== lastKnownAccCount;
       const itemsChanged = lastKnownItemsCount !== -1 && st.items_count !== lastKnownItemsCount;
+      const aiChanged = lastKnownAiRevision !== null && st.ai_revision !== lastKnownAiRevision;
       lastKnownAccCount = st.accounts_count;
       lastKnownItemsCount = st.items_count;
+      lastKnownAiRevision = st.ai_revision;
 
       if (!$("onboardingView").classList.contains("hidden")) {
         if (st.accounts_count > 0 && (!st.missing_secret_accounts || st.missing_secret_accounts.length === 0) && accounts.length === 0) {
@@ -2410,7 +2586,7 @@ pub const APP_JS: &str = r##"(() => {
           return;
         }
       }
-      if (accChanged || itemsChanged) {
+      if (accChanged || itemsChanged || aiChanged) {
         await loadAll();
         return;
       }
@@ -2441,13 +2617,16 @@ pub const APP_JS: &str = r##"(() => {
   applyTheme(false);
   selectPreset("gmail");
   loadAll();
+  loadAiSettings().catch(() => {});
 })();
 "##;
 
 pub const OTP_OVERLAY_HTML: &str = include_str!("otp_overlay.html");
+pub const CLICK_AUDIO: &[u8] = include_bytes!("click.m4a");
 
+/// Assets loaded by the main window; the overlay and click audio load separately.
 pub const fn bundle_size_bytes() -> u64 {
-    (INDEX_HTML.len() + STYLES_CSS.len() + APP_JS.len() + OTP_OVERLAY_HTML.len()) as u64
+    (INDEX_HTML.len() + STYLES_CSS.len() + APP_JS.len()) as u64
 }
 
 #[cfg(test)]
@@ -2458,6 +2637,7 @@ mod tests {
     #[test]
     fn bundle_stays_within_150kb_budget_and_hallmark_floor() {
         assert!(bundle_size_bytes() <= WEB_UI_MAX_ASSET_BYTES);
+        assert!(OTP_OVERLAY_HTML.len() as u64 <= WEB_UI_MAX_ASSET_BYTES);
         assert!(STYLES_CSS.starts_with("/* hallmark"));
         assert!(!STYLES_CSS.contains("transition: all"));
         assert!(!STYLES_CSS.contains("linear-gradient"));

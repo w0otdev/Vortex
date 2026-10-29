@@ -48,6 +48,25 @@ impl ClipboardGuard {
         self.clear_at_epoch = None;
         matches
     }
+
+    pub fn clear_delay_secs(&self) -> u64 {
+        self.clear_delay_secs
+    }
+
+    pub fn poll_and_clear_os_clipboard(&mut self, now_epoch: i64) -> bool {
+        let Some(deadline) = self.clear_at_epoch else {
+            return false;
+        };
+        if now_epoch < deadline {
+            return false;
+        }
+        let current = get_os_clipboard().unwrap_or_default();
+        if self.should_clear_now(&current, now_epoch) {
+            let _ = set_os_clipboard("");
+            return true;
+        }
+        false
+    }
 }
 
 fn hash_clipboard_value(val: &str) -> String {
@@ -57,17 +76,56 @@ fn hash_clipboard_value(val: &str) -> String {
     hex_encode(&hasher.finalize())
 }
 
-pub fn set_os_clipboard(text: &str) -> Result<(), String> {
+pub fn get_os_clipboard() -> Option<String> {
     if cfg!(target_os = "windows") {
-        let status = Command::new("powershell")
+        let out = Command::new("powershell")
             .args([
                 "-NoProfile",
                 "-NonInteractive",
                 "-Command",
-                &format!("Set-Clipboard -Value '{}'", text.replace('\'', "''")),
+                "Get-Clipboard -Raw",
             ])
-            .status()
+            .output()
+            .ok()?;
+        out.status
+            .success()
+            .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
+    } else if cfg!(target_os = "macos") {
+        let out = Command::new("pbpaste").output().ok()?;
+        out.status
+            .success()
+            .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
+    } else if cfg!(target_os = "linux") {
+        let out = Command::new("wl-paste").arg("--no-newline").output().ok()?;
+        out.status
+            .success()
+            .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
+    } else {
+        None
+    }
+}
+
+pub fn set_os_clipboard(text: &str) -> Result<(), String> {
+    if cfg!(target_os = "windows") {
+        let mut child = Command::new("powershell")
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "$val = [Console]::In.ReadToEnd(); Set-Clipboard -Value $val",
+            ])
+            .stdin(std::process::Stdio::piped())
+            .spawn()
             .map_err(|e| format!("clipboard command failed: {e}"))?;
+        if let Some(mut stdin) = child.stdin.take() {
+            use std::io::Write;
+            stdin
+                .write_all(text.as_bytes())
+                .map_err(|e| format!("clipboard stdin write failed: {e}"))?;
+        }
+        let status = child
+            .wait()
+            .map_err(|e| format!("clipboard wait failed: {e}"))?;
         if !status.success() {
             return Err("powershell Set-Clipboard exited non-zero".into());
         }
@@ -82,7 +140,7 @@ pub fn set_os_clipboard(text: &str) -> Result<(), String> {
         }
         let _ = child.wait();
     } else if cfg!(target_os = "linux") {
-        let _ = Command::new("wl-copy").arg(text).status();
+        let _ = Command::new("wl-copy").arg("--").arg(text).status();
     }
     Ok(())
 }
@@ -96,14 +154,18 @@ pub fn emit_os_otp_notification(event: &OtpPopupEvent) -> Result<(), String> {
     };
 
     if cfg!(target_os = "linux") {
-        let _ = Command::new("notify-send").args([&title, &body]).status();
+        let _ = Command::new("notify-send")
+            .args(["--", &title, &body])
+            .status();
     } else if cfg!(target_os = "macos") {
-        let script = format!(
-            "display notification \"{}\" with title \"{}\"",
-            body.replace('"', "\\\""),
-            title.replace('"', "\\\"")
-        );
-        let _ = Command::new("osascript").args(["-e", &script]).status();
+        let _ = Command::new("osascript")
+            .args([
+                "-e",
+                "on run argv\ndisplay notification (item 1 of argv) with title (item 2 of argv)\nend run",
+                &body,
+                &title,
+            ])
+            .status();
     }
     Ok(())
 }

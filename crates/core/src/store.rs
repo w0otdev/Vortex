@@ -1,7 +1,7 @@
 use crate::config::{AccountConfig, UserRuleConfig};
 use crate::model::{
     ExtractedCode, ExtractedEntity, ExtractedLink, Item, ItemCategory, ItemFilter, ItemState,
-    OtpPopupEvent, QuickAction, SourceKind,
+    OtpPopupEvent, QuickAction, SourceKind, constant_time_eq, generate_random_bytes_32,
 };
 use base64::Engine;
 use rusqlite::{Connection, OptionalExtension, params};
@@ -64,12 +64,19 @@ impl SqliteStore {
         encryption_secret: Option<&str>,
     ) -> Result<Self, String> {
         let encryption_key = encryption_secret.filter(|s| !s.is_empty()).map(|secret| {
+            let mut key = [0u8; 32];
             let mut hasher = Sha256::new();
             hasher.update(b"vortex-local-encryption-v1:");
             hasher.update(secret.as_bytes());
-            let digest = hasher.finalize();
-            let mut key = [0u8; 32];
-            key.copy_from_slice(&digest);
+            key.copy_from_slice(&hasher.finalize());
+            for round in 0..4096u32 {
+                let mut h = Sha256::new();
+                h.update(b"vortex-kdf-v2:");
+                h.update(round.to_le_bytes());
+                h.update(key);
+                h.update(secret.as_bytes());
+                key.copy_from_slice(&h.finalize());
+            }
             key
         });
 
@@ -177,6 +184,19 @@ impl SqliteStore {
                 estimated_tokens INTEGER NOT NULL,
                 payload_preview TEXT NOT NULL
             );
+            CREATE INDEX IF NOT EXISTS idx_ai_cache_updated ON ai_cache(updated_at);
+            CREATE INDEX IF NOT EXISTS idx_ai_call_log_created ON ai_call_log(created_at);
+            CREATE TABLE IF NOT EXISTS ai_jobs (
+                item_id INTEGER PRIMARY KEY REFERENCES items(id) ON DELETE CASCADE,
+                cache_key TEXT NOT NULL,
+                status TEXT NOT NULL,
+                error TEXT,
+                manual INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE TABLE IF NOT EXISTS app_settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS item_embeddings (
                 item_id INTEGER PRIMARY KEY,
                 vector_blob BLOB NOT NULL,
@@ -206,6 +226,29 @@ impl SqliteStore {
         ))
         .map_err(|e| format!("sqlite schema migration failed: {e}"))?;
 
+        for (table, name, definition) in [
+            ("items", "ai_hidden", "TEXT"),
+            ("items", "ai_keep", "INTEGER NOT NULL DEFAULT 0"),
+            ("ai_jobs", "manual", "INTEGER NOT NULL DEFAULT 0"),
+        ] {
+            let exists: bool = conn
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM pragma_table_info(?1) WHERE name = ?2)",
+                    params![table, name],
+                    |row| row.get(0),
+                )
+                .map_err(|e| e.to_string())?;
+            if !exists {
+                conn.execute_batch(&format!(
+                    "ALTER TABLE {table} ADD COLUMN {name} {definition}"
+                ))
+                .map_err(|e| format!("AI metadata migration failed: {e}"))?;
+            }
+        }
+        conn.execute_batch("DROP INDEX IF EXISTS idx_ai_jobs_status;
+            CREATE INDEX IF NOT EXISTS idx_ai_jobs_priority ON ai_jobs(status, manual DESC, item_id DESC);")
+            .map_err(|e| format!("AI queue index migration failed: {e}"))?;
+
         Ok(Self {
             conn,
             encryption_key,
@@ -221,21 +264,48 @@ impl SqliteStore {
         self.last_write_latency_ms() > BACKPRESSURE_WRITE_THRESHOLD_MS
     }
 
-    fn protect_field(&self, plain: &str, context: &str) -> String {
+    fn protect_field(&self, plain: &str, _context: &str) -> String {
         let Some(key) = &self.encryption_key else {
             return plain.to_string();
         };
         if plain.is_empty() {
             return String::new();
         }
-        let bytes = xor_stream_cipher(key, context.as_bytes(), plain.as_bytes());
+        let rand_bytes = generate_random_bytes_32(b"vortex-store-enc2-nonce", plain.len() as u64);
+        let nonce = &rand_bytes[..16];
+        let cipher = xor_stream_cipher(key, nonce, plain.as_bytes());
+        let mac = compute_field_mac(key, nonce, &cipher);
+        let mut payload = Vec::with_capacity(32 + cipher.len());
+        payload.extend_from_slice(nonce);
+        payload.extend_from_slice(&mac);
+        payload.extend_from_slice(&cipher);
         format!(
-            "enc1:{}",
-            base64::engine::general_purpose::STANDARD.encode(bytes)
+            "enc2:{}",
+            base64::engine::general_purpose::STANDARD.encode(payload)
         )
     }
 
     fn unprotect_field(&self, stored: &str, context: &str) -> String {
+        if let Some(rest) = stored.strip_prefix("enc2:") {
+            let Some(key) = &self.encryption_key else {
+                return String::new();
+            };
+            let Ok(payload) = base64::engine::general_purpose::STANDARD.decode(rest) else {
+                return String::new();
+            };
+            if payload.len() < 32 {
+                return String::new();
+            }
+            let nonce = &payload[..16];
+            let mac = &payload[16..32];
+            let cipher = &payload[32..];
+            let expected_mac = compute_field_mac(key, nonce, cipher);
+            if !constant_time_eq(&expected_mac, mac) {
+                return String::new();
+            }
+            let plain = xor_stream_cipher(key, nonce, cipher);
+            return String::from_utf8(plain).unwrap_or_default();
+        }
         let Some(rest) = stored.strip_prefix("enc1:") else {
             return stored.to_string();
         };
@@ -273,7 +343,10 @@ impl SqliteStore {
 
     pub fn clear_recent_codes(&self) -> Result<(), String> {
         self.conn
-            .execute("UPDATE recent_codes SET expires_at = 0 WHERE expires_at > 0", [])
+            .execute(
+                "UPDATE recent_codes SET expires_at = 0 WHERE expires_at > 0",
+                [],
+            )
             .map_err(|e| e.to_string())?;
         Ok(())
     }
@@ -337,9 +410,34 @@ impl SqliteStore {
         }
 
         let effective_ext_id = item.external_id.clone();
+        let preserve_analysis = tx
+            .query_row(
+                "SELECT sender, subject, body_text FROM items
+                 WHERE source = ?1 AND account = ?2 AND external_id = ?3
+                   AND EXISTS(SELECT 1 FROM ai_jobs WHERE item_id = items.id AND status = 'done')",
+                params![item.source.as_str(), item.account, effective_ext_id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                },
+            )
+            .optional()
+            .map_err(|e| e.to_string())?
+            .is_some_and(|(sender, subject, body)| {
+                sender == item.sender
+                    && subject == item.subject
+                    && self.unprotect_field(&body, &effective_ext_id) == item.body_text
+            });
         let body_text_stored = self.protect_field(&item.body_text, &effective_ext_id);
         let body_html_stored = self.protect_field(&item.body_html, &effective_ext_id);
-        let codes_stored = self.protect_field(&codes_raw, &effective_ext_id);
+        let codes_stored = if item.extracted_codes.is_empty() {
+            "[]".to_string()
+        } else {
+            self.protect_field(&codes_raw, &effective_ext_id)
+        };
 
         tx.execute(
             "INSERT INTO items (
@@ -382,6 +480,7 @@ impl SqliteStore {
                         ELSE excluded.labels_json
                     END,
                     category = CASE
+                        WHEN ?27 THEN items.category
                         WHEN items.category != 'other' AND (excluded.category = 'other' OR LENGTH(items.body_text) > LENGTH(excluded.body_text)) THEN items.category
                         ELSE excluded.category
                     END,
@@ -401,10 +500,11 @@ impl SqliteStore {
                     phishing_warning = COALESCE(excluded.phishing_warning, items.phishing_warning),
                     unsubscribe_link = COALESCE(excluded.unsubscribe_link, items.unsubscribe_link),
                     summary = CASE
+                        WHEN ?27 THEN items.summary
                         WHEN LENGTH(items.body_text) > LENGTH(excluded.body_text) AND items.summary IS NOT NULL THEN items.summary
                         ELSE excluded.summary
                     END,
-                    priority_score = MAX(items.priority_score, excluded.priority_score),
+                    priority_score = CASE WHEN ?27 THEN items.priority_score ELSE MAX(items.priority_score, excluded.priority_score) END,
                     gmail_labels_json = excluded.gmail_labels_json",
             params![
                 item.source.as_str(),
@@ -428,11 +528,12 @@ impl SqliteStore {
                 item.phishing_score,
                 item.phishing_warning,
                 item.unsubscribe_link,
-                item.summary,
+                item.summary.as_ref().map(|summary| self.protect_field(summary, "item-summary")),
                 item.priority_score,
                 gmail_labels_json,
                 item.list_unsubscribe_header,
                 item.precedence_header,
+                preserve_analysis,
             ],
         )
         .map_err(|e| format!("upsert_item failed: {e}"))?;
@@ -446,6 +547,11 @@ impl SqliteStore {
             .map_err(|e| format!("query item id failed: {e}"))?;
 
         let _ = tx.execute("DELETE FROM items_fts WHERE rowid = ?1", params![row_id]);
+        let fts_body = if self.encryption_key.is_some() {
+            ""
+        } else {
+            item.body_text.as_str()
+        };
         tx.execute(
             "INSERT INTO items_fts(rowid, sender, subject, body_text, labels)
                  VALUES (?1, ?2, ?3, ?4, ?5)",
@@ -453,7 +559,7 @@ impl SqliteStore {
                 row_id,
                 item.sender,
                 item.subject,
-                item.body_text,
+                fts_body,
                 item.labels.join(" ")
             ],
         )
@@ -527,6 +633,22 @@ impl SqliteStore {
             items.push(r.map_err(|e| format!("row decode failed: {e}"))?);
         }
         Ok(items)
+    }
+
+    pub fn status_digest(&self) -> Result<(usize, usize), String> {
+        self.conn
+            .query_row(
+                "SELECT COUNT(*), COALESCE(SUM(LENGTH(body_html) + LENGTH(body_text)), 0)
+                 FROM items
+                 WHERE state NOT IN ('trash', 'archived', 'spam')",
+                [],
+                |row| {
+                    let count: i64 = row.get(0)?;
+                    let total_len: i64 = row.get(1)?;
+                    Ok((count.max(0) as usize, total_len.max(0) as usize))
+                },
+            )
+            .map_err(|e| format!("status_digest failed: {e}"))
     }
 
     pub fn search_fts(&self, query: &str, limit: usize) -> Result<Vec<Item>, String> {
@@ -653,6 +775,20 @@ impl SqliteStore {
             }
             QuickAction::Unsubscribe | QuickAction::OpenVerificationLink => {}
         }
+        if matches!(
+            action,
+            QuickAction::Archive
+                | QuickAction::Delete
+                | QuickAction::MarkRead
+                | QuickAction::MarkUnread
+                | QuickAction::Snooze { .. }
+                | QuickAction::ReportSpam
+        ) {
+            self.conn.execute(
+                "UPDATE items SET ai_hidden = NULL, ai_keep = 1 WHERE id = ?1 AND ai_hidden IS NOT NULL",
+                params![item_id],
+            ).map_err(|e| e.to_string())?;
+        }
         Ok(())
     }
 
@@ -701,7 +837,18 @@ impl SqliteStore {
                      LIMIT 25",
                 )
                 .map_err(|e| e.to_string())?;
-            let seed_rows: Vec<(i64, String, String, String, String, String, String, i64, String)> = seed_stmt
+            type CodeSeed = (
+                i64,
+                String,
+                String,
+                String,
+                String,
+                String,
+                String,
+                i64,
+                String,
+            );
+            let seed_rows: Vec<CodeSeed> = seed_stmt
                 .query_map([], |r| {
                     Ok((
                         r.get(0)?,
@@ -719,16 +866,32 @@ impl SqliteStore {
                 .flatten()
                 .collect();
             let mut activated_latest = false;
-            for (item_id, account, ext_id, sender, recipient, subject, codes_stored, recv_at, state_str) in seed_rows {
+            for (
+                item_id,
+                account,
+                ext_id,
+                sender,
+                recipient,
+                subject,
+                codes_stored,
+                recv_at,
+                state_str,
+            ) in seed_rows
+            {
                 let raw = self.unprotect_field(&codes_stored, &ext_id);
                 let extracted: Vec<crate::model::ExtractedCode> =
                     serde_json::from_str(&raw).unwrap_or_default();
                 if let Some(first) = extracted.first() {
+                    if first.expires_at > 0 && first.expires_at <= now_epoch {
+                        continue;
+                    }
                     let hash = OtpPopupEvent::compute_dedup_hash(
                         &format!("{account}:{subject}"),
                         &first.code,
                     );
-                    let exp = if !activated_latest && state_str == "unread" {
+                    let exp = if first.expires_at > now_epoch {
+                        first.expires_at
+                    } else if !activated_latest && state_str == "unread" {
                         activated_latest = true;
                         now_epoch + 600
                     } else {
@@ -800,6 +963,23 @@ impl SqliteStore {
 
     pub fn prune_expired_bodies(&self, now_epoch: i64, keep_days: u32) -> Result<usize, String> {
         let cutoff = now_epoch - i64::from(keep_days) * 86_400;
+        for sql in [
+            "DELETE FROM ai_cache WHERE updated_at < ?1",
+            "DELETE FROM ai_call_log WHERE created_at < ?1",
+        ] {
+            self.conn
+                .execute(sql, params![cutoff])
+                .map_err(|e| format!("AI retention cleanup failed: {e}"))?;
+        }
+        let _ = self.conn.execute(
+            "UPDATE items_fts
+             SET body_text = ''
+             WHERE rowid IN (
+                 SELECT id FROM items
+                 WHERE received_at < ?1 AND (body_text != '' OR body_html != '')
+             )",
+            params![cutoff],
+        );
         let updated = self
             .conn
             .execute(
@@ -953,6 +1133,10 @@ impl SqliteStore {
             "DELETE FROM recent_codes WHERE item_id IN (SELECT id FROM items WHERE account = ?1)",
             params![id],
         );
+        let _ = self.conn.execute(
+            "DELETE FROM items_fts WHERE rowid IN (SELECT id FROM items WHERE account = ?1)",
+            params![id],
+        );
         let _ = self
             .conn
             .execute("DELETE FROM items WHERE account = ?1", params![id]);
@@ -993,12 +1177,146 @@ impl SqliteStore {
         Ok(out)
     }
 
+    pub fn get_setting(&self, key: &str) -> Result<Option<String>, String> {
+        self.conn
+            .query_row(
+                "SELECT value FROM app_settings WHERE key = ?1",
+                params![key],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| e.to_string())
+    }
+
+    pub fn set_setting(&self, key: &str, value: &str) -> Result<(), String> {
+        self.conn
+            .execute(
+                "INSERT INTO app_settings(key, value) VALUES (?1, ?2)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                params![key, value],
+            )
+            .map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    pub fn save_ai_settings(&self, json: &str, accounts: &[AccountConfig]) -> Result<(), String> {
+        let tx = self
+            .conn
+            .unchecked_transaction()
+            .map_err(|e| e.to_string())?;
+        self.set_setting("ai", json)?;
+        for account in accounts {
+            self.save_account(account)?;
+        }
+        tx.commit().map_err(|e| e.to_string())
+    }
+
+    pub fn queue_ai_item(&self, item_id: i64, cache_key: &str, force: bool) -> Result<(), String> {
+        self.conn.execute(
+            "INSERT INTO ai_jobs(item_id, cache_key, status, manual) VALUES (?1, ?2, 'pending', ?3)
+             ON CONFLICT(item_id) DO UPDATE SET cache_key = excluded.cache_key, status = 'pending', error = NULL, manual = excluded.manual
+             WHERE ai_jobs.cache_key != excluded.cache_key OR ?3", params![item_id, cache_key, force],
+        ).map_err(|e| e.to_string())?;
+        Ok(())
+    }
+
+    pub fn next_ai_job(&self) -> Result<Option<(i64, String)>, String> {
+        self.conn.query_row(
+            "SELECT item_id, cache_key FROM ai_jobs WHERE status = 'pending' ORDER BY manual DESC, item_id DESC LIMIT 1",
+            [], |row| Ok((row.get(0)?, row.get(1)?)),
+        ).optional().map_err(|e| e.to_string())
+    }
+
+    pub fn ai_job_is_current(&self, item_id: i64, cache_key: &str) -> Result<bool, String> {
+        self.conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM ai_jobs WHERE item_id = ?1 AND cache_key = ?2 AND status = 'pending')",
+            params![item_id, cache_key], |row| row.get(0),
+        ).map_err(|e| e.to_string())
+    }
+
+    pub fn finish_ai_job(
+        &self,
+        item_id: i64,
+        cache_key: &str,
+        error: Option<&str>,
+    ) -> Result<bool, String> {
+        let error = error.map(|e| e.chars().take(500).collect::<String>());
+        self.conn.execute(
+            "UPDATE ai_jobs SET status = ?3, error = ?4, manual = 0 WHERE item_id = ?1 AND cache_key = ?2 AND status = 'pending'",
+            params![item_id, cache_key, if error.is_some() { "failed" } else { "done" }, error],
+        ).map(|n| n > 0).map_err(|e| e.to_string())
+    }
+
+    pub fn ai_job_status(&self, item_id: i64) -> Result<Option<(String, Option<String>)>, String> {
+        self.conn
+            .query_row(
+                "SELECT status, error FROM ai_jobs WHERE item_id = ?1",
+                params![item_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()
+            .map_err(|e| e.to_string())
+    }
+
+    pub fn ai_auto_hide_allowed(&self, item_id: i64) -> Result<bool, String> {
+        self.conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM items WHERE id = ?1 AND ai_keep = 0 AND pinned = 0 AND state IN ('read', 'unread'))",
+            params![item_id], |row| row.get(0),
+        ).map_err(|e| e.to_string())
+    }
+
+    pub fn apply_ai_analysis(
+        &self,
+        item_id: i64,
+        summary: &str,
+        category: ItemCategory,
+        priority: u8,
+        hide: bool,
+    ) -> Result<bool, String> {
+        self.conn.execute(
+            "UPDATE items SET summary = ?2, category = ?3, priority_score = ?4,
+                ai_hidden = CASE WHEN ?5 AND pinned = 0 AND ai_keep = 0 THEN state ELSE ai_hidden END,
+                state = CASE WHEN ?5 AND pinned = 0 AND ai_keep = 0 THEN 'archived' ELSE state END
+             WHERE id = ?1 AND state IN ('read', 'unread')",
+            params![item_id, self.protect_field(summary, "item-summary"), category.as_str(), priority.min(100), hide],
+        ).map(|n| n > 0).map_err(|e| e.to_string())
+    }
+
+    pub fn restore_ai_item(&self, item_id: i64) -> Result<bool, String> {
+        self.conn
+            .execute(
+                "UPDATE items SET state = ai_hidden, ai_hidden = NULL, ai_keep = 1
+             WHERE id = ?1 AND state = 'archived' AND ai_hidden IN ('read', 'unread')",
+                params![item_id],
+            )
+            .map(|n| n > 0)
+            .map_err(|e| e.to_string())
+    }
+
+    pub fn list_ai_hidden(&self, account: Option<&str>, limit: usize) -> Result<Vec<Item>, String> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, source, account, external_id, sender, sender_domain, recipient,
+                    subject, body_text, body_html, received_at, state, snoozed_until,
+                    pinned, labels_json, category, codes_json, links_json, entities_json,
+                    phishing_score, phishing_warning, unsubscribe_link, summary,
+                    priority_score, gmail_labels_json, list_unsubscribe_header, precedence_header
+             FROM items WHERE ai_hidden IS NOT NULL AND state = 'archived' AND (?1 IS NULL OR account = ?1)
+             ORDER BY received_at DESC LIMIT ?2",
+        ).map_err(|e| e.to_string())?;
+        stmt.query_map(params![account, limit.clamp(1, 500) as i64], |row| {
+            self.map_item_row(row)
+        })
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())
+    }
+
     pub fn get_ai_cache(&self, content_hash: &str, task: &str) -> Result<Option<String>, String> {
         self.conn
             .query_row(
                 "SELECT response_json FROM ai_cache WHERE content_hash = ?1 AND task = ?2",
                 params![content_hash, task],
-                |row| row.get(0),
+                |row| Ok(self.unprotect_field(&row.get::<_, String>(0)?, content_hash)),
             )
             .optional()
             .map_err(|e| e.to_string())
@@ -1018,7 +1336,12 @@ impl SqliteStore {
                  ON CONFLICT(content_hash, task) DO UPDATE SET
                    response_json = excluded.response_json,
                    updated_at = excluded.updated_at",
-                params![content_hash, task, response_json, now_epoch],
+                params![
+                    content_hash,
+                    task,
+                    self.protect_field(response_json, content_hash),
+                    now_epoch
+                ],
             )
             .map_err(|e| e.to_string())?;
         Ok(())
@@ -1044,7 +1367,7 @@ impl SqliteStore {
                     model,
                     task,
                     estimated_tokens as i64,
-                    payload_preview
+                    self.protect_field(payload_preview, "ai-call-log")
                 ],
             )
             .map_err(|e| e.to_string())?;
@@ -1068,7 +1391,7 @@ impl SqliteStore {
                     model: row.get(3)?,
                     task: row.get(4)?,
                     estimated_tokens: row.get::<_, i64>(5)? as usize,
-                    payload_preview: row.get(6)?,
+                    payload_preview: self.unprotect_field(&row.get::<_, String>(6)?, "ai-call-log"),
                 })
             })
             .map_err(|e| e.to_string())?;
@@ -1242,7 +1565,9 @@ impl SqliteStore {
             phishing_score: row.get::<_, u8>(19)?,
             phishing_warning: row.get(20)?,
             unsubscribe_link: row.get(21)?,
-            summary: row.get(22)?,
+            summary: row
+                .get::<_, Option<String>>(22)?
+                .map(|summary| self.unprotect_field(&summary, "item-summary")),
             priority_score: row.get::<_, u8>(23)?,
             gmail_labels,
             list_unsubscribe_header: row.get(25)?,
@@ -1263,6 +1588,19 @@ fn sanitize_fts_query(q: &str) -> String {
         .map(|w| format!("\"{w}\""))
         .collect();
     tokens.join(" AND ")
+}
+
+fn compute_field_mac(key: &[u8; 32], nonce: &[u8], cipher: &[u8]) -> [u8; 16] {
+    let mut hasher = Sha256::new();
+    hasher.update(b"vortex-enc2-mac:");
+    hasher.update(key);
+    hasher.update(nonce);
+    hasher.update((cipher.len() as u64).to_le_bytes());
+    hasher.update(cipher);
+    let digest = hasher.finalize();
+    let mut mac = [0u8; 16];
+    mac.copy_from_slice(&digest[..16]);
+    mac
 }
 
 fn xor_stream_cipher(key: &[u8; 32], context: &[u8], data: &[u8]) -> Vec<u8> {
@@ -1297,5 +1635,309 @@ pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
         0.0
     } else {
         dot / denom
+    }
+}
+
+#[cfg(test)]
+mod ai_tests {
+    use super::*;
+
+    fn message(external_id: &str) -> Item {
+        Item::new(
+            SourceKind::Email,
+            "me@example.com",
+            external_id,
+            "news@example.com",
+            "Weekly offers",
+            "A newsletter with weekly offers.",
+            1_700_000_000,
+        )
+    }
+
+    #[test]
+    fn ai_queue_is_durable_deduplicated_and_rejects_stale_completion() {
+        let store = SqliteStore::open_in_memory(false, None).unwrap();
+        let id = store.upsert_item(&message("queue")).unwrap();
+        store.queue_ai_item(id, "first", false).unwrap();
+        assert_eq!(store.next_ai_job().unwrap(), Some((id, "first".into())));
+        store.queue_ai_item(id, "second", false).unwrap();
+        assert!(!store.ai_job_is_current(id, "first").unwrap());
+        assert!(!store.finish_ai_job(id, "first", None).unwrap());
+        assert!(store.finish_ai_job(id, "second", None).unwrap());
+        store.queue_ai_item(id, "second", false).unwrap();
+        assert!(store.next_ai_job().unwrap().is_none());
+        store.queue_ai_item(id, "second", true).unwrap();
+        assert!(
+            store
+                .finish_ai_job(id, "second", Some("provider unavailable"))
+                .unwrap()
+        );
+        assert_eq!(
+            store.ai_job_status(id).unwrap(),
+            Some(("failed".into(), Some("provider unavailable".into())))
+        );
+        store.set_setting("ai", "{\"enabled\":false}").unwrap();
+        assert_eq!(
+            store.get_setting("ai").unwrap().as_deref(),
+            Some("{\"enabled\":false}")
+        );
+        store
+            .conn
+            .execute("DELETE FROM items WHERE id = ?1", params![id])
+            .unwrap();
+        assert!(store.ai_job_status(id).unwrap().is_none());
+    }
+
+    #[test]
+    fn ai_settings_roll_back_account_failures() {
+        let store = SqliteStore::open_in_memory(false, None).unwrap();
+        store.set_setting("ai", "previous").unwrap();
+        let account = |id: &str| {
+            serde_json::from_value::<AccountConfig>(serde_json::json!({
+                "id": id, "source": "email", "email_or_handle": id,
+                "host": "imap.example.com", "port": 993, "ai_enabled": true,
+            }))
+            .unwrap()
+        };
+        store
+            .conn
+            .execute_batch(
+                "CREATE TRIGGER reject_account BEFORE INSERT ON accounts
+            WHEN NEW.id = 'blocked' BEGIN SELECT RAISE(ABORT, 'test failure'); END;",
+            )
+            .unwrap();
+        assert!(
+            store
+                .save_ai_settings("next", &[account("allowed"), account("blocked")])
+                .is_err()
+        );
+        assert_eq!(
+            store.get_setting("ai").unwrap().as_deref(),
+            Some("previous")
+        );
+        assert!(store.list_accounts().unwrap().is_empty());
+        store
+            .save_ai_settings("next", &[account("allowed")])
+            .unwrap();
+        assert_eq!(store.get_setting("ai").unwrap().as_deref(), Some("next"));
+        assert!(store.list_accounts().unwrap()[0].ai_enabled);
+    }
+
+    #[test]
+    fn manual_ai_requests_take_priority_over_new_arrivals() {
+        let store = SqliteStore::open_in_memory(false, None).unwrap();
+        let older = store.upsert_item(&message("older")).unwrap();
+        let newer = store.upsert_item(&message("newer")).unwrap();
+        store.queue_ai_item(older, "old", false).unwrap();
+        store.queue_ai_item(newer, "new", false).unwrap();
+        assert_eq!(store.next_ai_job().unwrap(), Some((newer, "new".into())));
+        store.queue_ai_item(older, "old", true).unwrap();
+        assert_eq!(store.next_ai_job().unwrap(), Some((older, "old".into())));
+        store.finish_ai_job(older, "old", None).unwrap();
+        store.queue_ai_item(older, "old", false).unwrap();
+        assert_eq!(store.next_ai_job().unwrap(), Some((newer, "new".into())));
+        store.queue_ai_item(older, "old", true).unwrap();
+        store
+            .finish_ai_job(older, "old", Some("unavailable"))
+            .unwrap();
+        store.queue_ai_item(older, "old", false).unwrap();
+        assert_eq!(store.next_ai_job().unwrap(), Some((newer, "new".into())));
+        store.queue_ai_item(older, "changed", false).unwrap();
+        assert_eq!(store.next_ai_job().unwrap(), Some((newer, "new".into())));
+    }
+
+    #[test]
+    fn ai_cache_and_logs_follow_body_retention_without_requeuing_done_mail() {
+        let store = SqliteStore::open_in_memory(false, None).unwrap();
+        let now = 1_700_000_000;
+        let cutoff = now - 7 * 86_400;
+        store
+            .set_ai_cache("expired", "classify", "old", cutoff - 1)
+            .unwrap();
+        store
+            .set_ai_cache("boundary", "classify", "retained", cutoff)
+            .unwrap();
+        store
+            .set_ai_cache("recent", "classify", "new", now)
+            .unwrap();
+        for timestamp in [cutoff - 1, cutoff, now] {
+            store
+                .log_ai_call(timestamp, "ollama", "small", "classify", 10, "excerpt")
+                .unwrap();
+        }
+        let id = store.upsert_item(&message("done")).unwrap();
+        store.queue_ai_item(id, "expired", false).unwrap();
+        store.finish_ai_job(id, "expired", None).unwrap();
+        store.prune_expired_bodies(now, 7).unwrap();
+        assert!(store.get_ai_cache("expired", "classify").unwrap().is_none());
+        assert!(
+            store
+                .get_ai_cache("boundary", "classify")
+                .unwrap()
+                .is_some()
+        );
+        assert!(store.get_ai_cache("recent", "classify").unwrap().is_some());
+        let log = store.list_ai_calls(10).unwrap();
+        assert_eq!(log.len(), 2);
+        assert!(log.iter().all(|entry| entry.created_at >= cutoff));
+        store.queue_ai_item(id, "expired", false).unwrap();
+        assert!(store.next_ai_job().unwrap().is_none());
+    }
+
+    #[test]
+    fn ai_queue_survives_reopen_and_metadata_migration_is_idempotent() {
+        let name = format!(
+            "vortex-ai-{}-{}.db",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        );
+        let path = std::env::temp_dir().join(name);
+        let id = {
+            let store = SqliteStore::open(&path, false, None).unwrap();
+            let id = store.upsert_item(&message("persisted")).unwrap();
+            store.queue_ai_item(id, "persisted-key", false).unwrap();
+            store.conn.execute_batch("ALTER TABLE items DROP COLUMN ai_hidden; ALTER TABLE items DROP COLUMN ai_keep;
+                DROP INDEX idx_ai_jobs_priority; ALTER TABLE ai_jobs DROP COLUMN manual;").unwrap();
+            id
+        };
+        {
+            let store = SqliteStore::open(&path, false, None).unwrap();
+            assert_eq!(
+                store.next_ai_job().unwrap(),
+                Some((id, "persisted-key".into()))
+            );
+            assert!(store.ai_auto_hide_allowed(id).unwrap());
+            store
+                .apply_ai_analysis(id, "Offers", ItemCategory::PromoNewsletter, 3, true)
+                .unwrap();
+        }
+        {
+            let store = SqliteStore::open(&path, false, None).unwrap();
+            assert_eq!(store.list_ai_hidden(None, 1).unwrap().len(), 1);
+            assert!(store.restore_ai_item(id).unwrap());
+        }
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn ai_hide_is_reversible_and_respects_manual_states_and_pins() {
+        let store = SqliteStore::open_in_memory(false, None).unwrap();
+        let original = message("hide");
+        let id = store.upsert_item(&original).unwrap();
+        store.queue_ai_item(id, "key", false).unwrap();
+        assert!(
+            store
+                .apply_ai_analysis(
+                    id,
+                    "Weekly promotions",
+                    ItemCategory::PromoNewsletter,
+                    5,
+                    true
+                )
+                .unwrap()
+        );
+        store.finish_ai_job(id, "key", None).unwrap();
+        assert!(store.list_items(&ItemFilter::default()).unwrap().is_empty());
+        assert_eq!(store.list_ai_hidden(None, 10).unwrap().len(), 1);
+        store.upsert_item(&original).unwrap();
+        let analyzed = store.get_item(id).unwrap().unwrap();
+        assert_eq!(analyzed.summary.as_deref(), Some("Weekly promotions"));
+        assert_eq!(analyzed.priority_score, 5);
+        assert_eq!(analyzed.category, ItemCategory::PromoNewsletter);
+        assert!(store.restore_ai_item(id).unwrap());
+        assert_eq!(
+            store.get_item(id).unwrap().unwrap().state,
+            ItemState::Unread
+        );
+        assert!(!store.ai_auto_hide_allowed(id).unwrap());
+        store
+            .apply_ai_analysis(id, "Still visible", ItemCategory::PromoNewsletter, 5, true)
+            .unwrap();
+        assert_eq!(
+            store.get_item(id).unwrap().unwrap().state,
+            ItemState::Unread
+        );
+
+        let pinned = store.upsert_item(&message("pinned")).unwrap();
+        store.apply_action(pinned, &QuickAction::Pin).unwrap();
+        store
+            .apply_ai_analysis(
+                pinned,
+                "Pinned mail",
+                ItemCategory::PromoNewsletter,
+                4,
+                true,
+            )
+            .unwrap();
+        assert_eq!(
+            store.get_item(pinned).unwrap().unwrap().state,
+            ItemState::Unread
+        );
+        store.apply_action(pinned, &QuickAction::Delete).unwrap();
+        assert!(
+            !store
+                .apply_ai_analysis(pinned, "Ignore", ItemCategory::Other, 90, true)
+                .unwrap()
+        );
+        assert_eq!(
+            store.get_item(pinned).unwrap().unwrap().state,
+            ItemState::Trash
+        );
+    }
+
+    #[test]
+    fn ai_storage_encrypts_cache_and_logs_and_preserves_encrypted_resync() {
+        let store = SqliteStore::open_in_memory(false, Some("test-encryption-key")).unwrap();
+        store
+            .set_ai_cache("hash", "classify", "private summary", 1)
+            .unwrap();
+        assert_eq!(
+            store.get_ai_cache("hash", "classify").unwrap().as_deref(),
+            Some("private summary")
+        );
+        let raw: String = store
+            .conn
+            .query_row("SELECT response_json FROM ai_cache", [], |row| row.get(0))
+            .unwrap();
+        assert!(raw.starts_with("enc2:"));
+        store
+            .log_ai_call(1, "ollama", "small", "classify", 10, "private excerpt")
+            .unwrap();
+        assert_eq!(
+            store.list_ai_calls(1).unwrap()[0].payload_preview,
+            "private excerpt"
+        );
+        let raw: String = store
+            .conn
+            .query_row("SELECT payload_preview FROM ai_call_log", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert!(raw.starts_with("enc2:"));
+        let item = message("encrypted");
+        let id = store.upsert_item(&item).unwrap();
+        store.queue_ai_item(id, "same", false).unwrap();
+        store
+            .apply_ai_analysis(id, "Generated summary", ItemCategory::Work, 17, false)
+            .unwrap();
+        store.finish_ai_job(id, "same", None).unwrap();
+        store.upsert_item(&item).unwrap();
+        assert_eq!(
+            store.get_item(id).unwrap().unwrap().summary.as_deref(),
+            Some("Generated summary")
+        );
+        assert_eq!(store.get_item(id).unwrap().unwrap().priority_score, 17);
+        let raw: String = store
+            .conn
+            .query_row(
+                "SELECT summary FROM items WHERE id = ?1",
+                params![id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(raw.starts_with("enc2:"));
     }
 }

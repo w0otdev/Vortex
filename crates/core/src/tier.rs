@@ -154,6 +154,11 @@ impl TierRuntimePolicy {
 }
 
 fn detect_ram_mb() -> Option<u64> {
+    if let Ok(override_mb) = env::var("VORTEX_RAM_MB")
+        && let Ok(mb) = override_mb.parse::<u64>()
+    {
+        return Some(mb);
+    }
     if let Ok(meminfo) = fs::read_to_string("/proc/meminfo") {
         for line in meminfo.lines() {
             if let Some(rest) = line.strip_prefix("MemTotal:") {
@@ -161,11 +166,6 @@ fn detect_ram_mb() -> Option<u64> {
                 return Some(kb / 1024);
             }
         }
-    }
-    if let Ok(override_mb) = env::var("VORTEX_RAM_MB")
-        && let Ok(mb) = override_mb.parse::<u64>()
-    {
-        return Some(mb);
     }
     Some(8192)
 }

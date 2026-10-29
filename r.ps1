@@ -42,7 +42,7 @@ try {
     Get-ChildItem -Path $env:TEMP -Directory -Filter "vortex-inbox-webview2-*" -ErrorAction SilentlyContinue |
         Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
     Remove-Item -Path (Join-Path $PSScriptRoot ".github\context-mode") -Recurse -Force -ErrorAction SilentlyContinue
-    Get-ChildItem -Path $PSScriptRoot -File -Include "*.pdb", "*.tmp", "*.log", "vortex.db", "vortex.db-shm", "vortex.db-wal" -ErrorAction SilentlyContinue |
+    Get-ChildItem -Path $PSScriptRoot -File -Include "*.pdb", "*.tmp", "*.log" -ErrorAction SilentlyContinue |
         Remove-Item -Force -ErrorAction SilentlyContinue
 
     $env:CARGO_INCREMENTAL = "1"
@@ -112,7 +112,7 @@ public static class VortexWin32 {
             Start-Sleep -Milliseconds 40
             $p = Get-Process -Id $proc.Id -ErrorAction SilentlyContinue
             if (-not $p) { break }
-            $hwnd = [VortexWin32]::FindWindow($null, "Vortex Inbox")
+            $hwnd = [VortexWin32]::FindWindow($null, "Vortex")
             if ($hwnd -eq [IntPtr]::Zero) {
                 $hwnd = $p.MainWindowHandle
             }

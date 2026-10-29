@@ -16,15 +16,23 @@ fn main() {
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap());
     let rc_file = manifest_dir.join("vortex.rc");
 
-    let rc_candidates = [
-        "rc.exe",
-        r"C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\rc.exe",
-        r"C:\Program Files (x86)\Windows Kits\10\bin\10.0.22621.0\x64\rc.exe",
-        r"C:\Program Files (x86)\Windows Kits\10\bin\10.0.19041.0\x64\rc.exe",
+    let mut rc_candidates = vec![
+        PathBuf::from("rc.exe"),
+        PathBuf::from(r"C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\rc.exe"),
+        PathBuf::from(r"C:\Program Files (x86)\Windows Kits\10\bin\10.0.22621.0\x64\rc.exe"),
+        PathBuf::from(r"C:\Program Files (x86)\Windows Kits\10\bin\10.0.19041.0\x64\rc.exe"),
     ];
+    if let Ok(entries) = std::fs::read_dir(r"C:\Program Files (x86)\Windows Kits\10\bin") {
+        for entry in entries.flatten() {
+            let candidate = entry.path().join("x64").join("rc.exe");
+            if candidate.is_file() && !rc_candidates.contains(&candidate) {
+                rc_candidates.push(candidate);
+            }
+        }
+    }
 
     for rc in rc_candidates {
-        if let Ok(status) = Command::new(rc)
+        if let Ok(status) = Command::new(&rc)
             .args(["/nologo", "/fo"])
             .arg(&res_path)
             .arg(&rc_file)
@@ -35,4 +43,5 @@ fn main() {
             return;
         }
     }
+    println!("cargo:warning=rc.exe not found; skipping Windows icon resource");
 }

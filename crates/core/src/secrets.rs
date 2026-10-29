@@ -27,14 +27,15 @@ impl SecretStore {
     pub fn set_secret(&self, key: &str, secret: &str) -> Result<(), String> {
         match self {
             Self::OsKeyring(cache) => {
-                if let Ok(mut guard) = cache.lock() {
-                    guard.insert(key.to_string(), secret.to_string());
-                }
                 let entry = keyring::Entry::new(SERVICE_NAME, key)
                     .map_err(|e| format!("keyring init error: {e}"))?;
                 entry
                     .set_password(secret)
-                    .map_err(|e| format!("keyring store error: {e}"))
+                    .map_err(|e| format!("keyring store error: {e}"))?;
+                if let Ok(mut guard) = cache.lock() {
+                    guard.insert(key.to_string(), secret.to_string());
+                }
+                Ok(())
             }
             Self::Memory(map) => {
                 map.lock()

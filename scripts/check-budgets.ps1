@@ -16,8 +16,8 @@ $rssBytes = $proc.WorkingSet64
 $proc.WaitForExit()
 
 foreach ($tier in @("lite", "standard", "full")) {
-    & $BinaryPath --check-budgets $tier --binary-bytes $binBytes --rss-bytes $rssBytes
-    if ($LASTEXITCODE -ne 0) {
+    $check = Start-Process -FilePath $BinaryPath -ArgumentList "--check-budgets", $tier, "--binary-bytes", "$binBytes", "--rss-bytes", "$rssBytes" -Wait -PassThru -NoNewWindow
+    if ($check.ExitCode -ne 0) {
         throw "Budget check failed for tier $tier"
     }
 }

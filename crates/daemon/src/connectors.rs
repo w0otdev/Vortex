@@ -111,6 +111,11 @@ impl TelegramBotConnector {
         }
     }
 
+    pub fn with_last_update_id(mut self, last_update_id: i64) -> Self {
+        self.last_update_id = last_update_id;
+        self
+    }
+
     pub fn parse_updates_json(
         &mut self,
         raw_json: &str,
@@ -285,6 +290,9 @@ fn extract_xml_tag(xml: &str, tag: &str) -> Option<String> {
 }
 
 pub fn http_get_text(url: &str, headers: &[(String, String)]) -> Result<String, String> {
+    if url.contains('\r') || url.contains('\n') {
+        return Err("URL contains forbidden control characters".into());
+    }
     let (use_tls, rest) = if let Some(r) = url.strip_prefix("https://") {
         (true, r)
     } else if let Some(r) = url.strip_prefix("http://") {
@@ -293,10 +301,11 @@ pub fn http_get_text(url: &str, headers: &[(String, String)]) -> Result<String, 
         return Err(format!("unsupported URL scheme: {url}"));
     };
 
-    let (host_port, path) = match rest.split_once('/') {
+    let (authority, path) = match rest.split_once('/') {
         Some((hp, p)) => (hp, format!("/{p}")),
         None => (rest, "/".to_string()),
     };
+    let host_port = authority.rsplit_once('@').map_or(authority, |(_, hp)| hp);
     let (host, port) = match host_port.split_once(':') {
         Some((h, p)) => (
             h,
@@ -304,6 +313,16 @@ pub fn http_get_text(url: &str, headers: &[(String, String)]) -> Result<String, 
         ),
         None => (host_port, if use_tls { 443 } else { 80 }),
     };
+    let host_lower = host.trim_matches(['[', ']']).to_ascii_lowercase();
+    if host_lower.is_empty()
+        || host_lower == "localhost"
+        || host_lower == "0.0.0.0"
+        || host_lower == "::1"
+        || host_lower.starts_with("127.")
+        || host_lower.starts_with("169.254.")
+    {
+        return Err(format!("disallowed loopback or link-local host: {host}"));
+    }
 
     let tcp = TcpStream::connect((host, port))
         .map_err(|e| format!("connect {host}:{port} failed: {e}"))?;
@@ -311,9 +330,12 @@ pub fn http_get_text(url: &str, headers: &[(String, String)]) -> Result<String, 
     let _ = tcp.set_write_timeout(Some(Duration::from_secs(10)));
 
     let mut req = format!(
-        "GET {path} HTTP/1.1\r\nHost: {host_port}\r\nUser-Agent: VortexInbox/0.1\r\nConnection: close\r\n"
+        "GET {path} HTTP/1.0\r\nHost: {host_port}\r\nUser-Agent: VortexInbox/0.1\r\nConnection: close\r\n"
     );
     for (k, v) in headers {
+        if k.contains('\r') || k.contains('\n') || v.contains('\r') || v.contains('\n') {
+            return Err("HTTP header contains forbidden control characters".into());
+        }
         req.push_str(&format!("{k}: {v}\r\n"));
     }
     req.push_str("\r\n");
@@ -323,16 +345,24 @@ pub fn http_get_text(url: &str, headers: &[(String, String)]) -> Result<String, 
         let tls_conn = native_tls::TlsConnector::new().map_err(|e| e.to_string())?;
         let mut tls = tls_conn.connect(host, tcp).map_err(|e| e.to_string())?;
         tls.write_all(req.as_bytes()).map_err(|e| e.to_string())?;
-        tls.read_to_string(&mut raw).map_err(|e| e.to_string())?;
+        tls.take(2 * 1024 * 1024)
+            .read_to_string(&mut raw)
+            .map_err(|e| e.to_string())?;
     } else {
         let mut s = tcp;
         s.write_all(req.as_bytes()).map_err(|e| e.to_string())?;
-        s.read_to_string(&mut raw).map_err(|e| e.to_string())?;
+        s.take(2 * 1024 * 1024)
+            .read_to_string(&mut raw)
+            .map_err(|e| e.to_string())?;
     }
 
-    let (_, body) = raw
+    let (headers_part, body) = raw
         .split_once("\r\n\r\n")
         .ok_or_else(|| "invalid HTTP response".to_string())?;
+    let status_line = headers_part.lines().next().unwrap_or("");
+    if !status_line.starts_with("HTTP/1.1 2") && !status_line.starts_with("HTTP/1.0 2") {
+        return Err(format!("HTTP error response: {status_line}"));
+    }
     Ok(body.to_string())
 }
 

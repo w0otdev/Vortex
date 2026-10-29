@@ -151,7 +151,8 @@ pub fn detect_fast_path(
     };
 
     let latency_ms = start.elapsed().as_millis() as u64;
-    let code_hash = OtpPopupEvent::compute_dedup_hash(&item.external_id, &code);
+    let code_hash =
+        OtpPopupEvent::compute_dedup_hash(&format!("{}:{}", item.account, item.subject), &code);
     let popup = OtpPopupEvent {
         item_id: item.id,
         message_id: item.external_id.clone(),
@@ -194,7 +195,13 @@ fn extract_candidates(text: &str) -> Vec<(String, usize)> {
             continue;
         }
         // Ignore tokens directly followed by '%', '$', 'đ', or '.00'.
-        if i < bytes.len() && matches!(bytes[i], b'%' | b'$') {
+        let tail = &text[i..];
+        if tail.starts_with('%')
+            || tail.starts_with('$')
+            || tail.starts_with('đ')
+            || tail.starts_with('₫')
+            || tail.starts_with(".00")
+        {
             continue;
         }
 

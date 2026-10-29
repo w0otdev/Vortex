@@ -59,9 +59,11 @@ pub fn generate_pkce_session(
     redirect_port: u16,
     seed: u64,
 ) -> PkceSession {
+    let entropy = vortex_core::model::generate_random_bytes_32(b"vortex-oauth-pkce", seed);
     let mut verifier_hasher = Sha256::new();
     verifier_hasher.update(b"vortex-pkce-verifier:");
     verifier_hasher.update(seed.to_le_bytes());
+    verifier_hasher.update(entropy);
     verifier_hasher.update(client_id.as_bytes());
     let code_verifier =
         base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(verifier_hasher.finalize());
@@ -74,6 +76,7 @@ pub fn generate_pkce_session(
     let mut state_hasher = Sha256::new();
     state_hasher.update(b"vortex-oauth-state:");
     state_hasher.update(seed.to_le_bytes());
+    state_hasher.update(entropy);
     let state =
         base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&state_hasher.finalize()[..12]);
 
@@ -122,9 +125,9 @@ pub fn wait_for_loopback_oauth_code(
     let mut state = None;
     for pair in query.split('&') {
         if let Some((k, v)) = pair.split_once('=') {
-            match k {
-                "code" => code = Some(v.to_string()),
-                "state" => state = Some(v.to_string()),
+            match url_decode(k).as_str() {
+                "code" => code = Some(url_decode(v)),
+                "state" => state = Some(url_decode(v)),
                 _ => {}
             }
         }
@@ -185,7 +188,8 @@ fn https_post_form_token(host: &str, path: &str, form_body: &str) -> Result<OAut
     tls.write_all(req.as_bytes())
         .map_err(|e| format!("token write failed: {e}"))?;
     let mut resp = String::new();
-    tls.read_to_string(&mut resp)
+    tls.take(512 * 1024)
+        .read_to_string(&mut resp)
         .map_err(|e| format!("token read failed: {e}"))?;
     let (_, body) = resp
         .split_once("\r\n\r\n")
@@ -225,4 +229,27 @@ fn url_encode(s: &str) -> String {
         }
     }
     out
+}
+
+fn url_decode(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'+' {
+            out.push(b' ');
+            i += 1;
+        } else if bytes[i] == b'%'
+            && i + 2 < bytes.len()
+            && let Ok(hex_str) = std::str::from_utf8(&bytes[i + 1..i + 3])
+            && let Ok(val) = u8::from_str_radix(hex_str, 16)
+        {
+            out.push(val);
+            i += 3;
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
 }

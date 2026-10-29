@@ -205,6 +205,9 @@ mod tests {
         let fts_hits = store.search_fts("verification", 10).unwrap();
         assert_eq!(fts_hits.len(), 1);
         assert_eq!(fts_hits[0].id, id);
+        // Encrypted store must not index plaintext body_text into FTS5.
+        let body_fts_hits = store.search_fts("complete", 10).unwrap();
+        assert!(body_fts_hits.is_empty());
 
         store.apply_action(id, &QuickAction::Pin).unwrap();
         let pinned = store
@@ -222,6 +225,28 @@ mod tests {
         let after_prune = store.get_item(id).unwrap().unwrap();
         assert!(after_prune.body_text.is_empty());
         assert_eq!(after_prune.subject, "Your verification code is 849201");
+
+        // Promotion of temporary external_id must preserve encrypted fields.
+        let mut temp_item = Item::new(
+            SourceKind::Email,
+            "work@example.com",
+            "gmail-msg-temp1",
+            "Stripe <receipts@stripe.com>",
+            "Payment receipt",
+            "Encrypted receipt body",
+            1_700_000_010,
+        );
+        temp_item.body_html = "<p>Encrypted receipt body</p>".into();
+        let temp_id = store.upsert_item(&temp_item).unwrap();
+        let mut promoted = temp_item.clone();
+        promoted.external_id = "42".into();
+        promoted.body_text.clear();
+        promoted.body_html.clear();
+        let promoted_id = store.upsert_item(&promoted).unwrap();
+        assert_eq!(temp_id, promoted_id);
+        let reloaded = store.get_item(promoted_id).unwrap().unwrap();
+        assert_eq!(reloaded.external_id, "42");
+        assert_eq!(reloaded.body_text, "Encrypted receipt body");
     }
 
     #[test]

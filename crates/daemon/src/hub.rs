@@ -2,7 +2,7 @@ use base64::Engine;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
-use vortex_core::model::{OtpPopupEvent, hex_encode};
+use vortex_core::model::{OtpPopupEvent, constant_time_eq, generate_random_bytes_32, hex_encode};
 use vortex_core::store::PairedDevice;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -28,15 +28,18 @@ pub fn create_pairing_ticket(
     device_name: &str,
     seed: u64,
 ) -> (PairingTicket, PairedDevice) {
+    let entropy = generate_random_bytes_32(b"vortex-hub-pairing", seed);
     let mut secret_hasher = Sha256::new();
     secret_hasher.update(b"vortex-hub-shared-secret:");
     secret_hasher.update(device_id.as_bytes());
     secret_hasher.update(seed.to_le_bytes());
+    secret_hasher.update(entropy);
     let shared_secret = hex_encode(&secret_hasher.finalize());
 
     let mut token_hasher = Sha256::new();
     token_hasher.update(b"vortex-one-time-token:");
     token_hasher.update(shared_secret.as_bytes());
+    token_hasher.update(entropy);
     let one_time_token = hex_encode(&token_hasher.finalize()[..8]);
 
     let shared_secret_hash = hash_shared_secret(&shared_secret);
@@ -95,7 +98,8 @@ pub fn decrypt_e2e_payload(
         envelope.nonce,
         &envelope.ciphertext_b64,
     );
-    if !expected_mac.eq_ignore_ascii_case(&envelope.mac_hex) {
+    let actual_mac = envelope.mac_hex.trim().to_ascii_lowercase();
+    if !constant_time_eq(expected_mac.as_bytes(), actual_mac.as_bytes()) {
         return Err("E2E envelope MAC verification failed".into());
     }
     let cipher = base64::engine::general_purpose::STANDARD
@@ -147,7 +151,13 @@ pub struct HubBroadcaster {
 
 impl HubBroadcaster {
     pub fn new() -> Self {
-        Self::default()
+        let seed_bytes = generate_random_bytes_32(b"vortex-hub-nonce-init", 0);
+        let mut init_nonce = [0u8; 8];
+        init_nonce.copy_from_slice(&seed_bytes[..8]);
+        Self {
+            seen_code_hashes: HashSet::new(),
+            nonce_counter: u64::from_le_bytes(init_nonce),
+        }
     }
 
     pub fn fanout_otp_event(

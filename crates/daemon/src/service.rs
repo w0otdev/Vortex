@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};
-use vortex_core::model::hex_encode;
+use vortex_core::model::{constant_time_eq, hex_encode};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReleaseAssetInfo {
@@ -11,28 +11,42 @@ pub struct ReleaseAssetInfo {
     pub sha256_hex: String,
 }
 
+fn sanitize_path_for_shell(p: &Path) -> String {
+    p.display()
+        .to_string()
+        .chars()
+        .filter(|c| !c.is_control() && *c != '"')
+        .collect()
+}
+
+fn escape_xml(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;")
+}
+
 pub fn generate_systemd_user_unit(binary_path: &Path, config_path: &Path) -> String {
+    let bin = sanitize_path_for_shell(binary_path).replace('\\', "\\\\");
+    let cfg = sanitize_path_for_shell(config_path).replace('\\', "\\\\");
     format!(
-        "[Unit]\nDescription=Vortex Inbox Background Agent\nAfter=network-online.target\n\n[Service]\nType=simple\nExecStart=\"{}\" daemon --config \"{}\"\nRestart=on-failure\nRestartSec=10\n\n[Install]\nWantedBy=default.target\n",
-        binary_path.display(),
-        config_path.display()
+        "[Unit]\nDescription=Vortex Inbox Background Agent\nAfter=network-online.target\n\n[Service]\nType=simple\nExecStart=\"{bin}\" daemon --config \"{cfg}\"\nRestart=on-failure\nRestartSec=10\n\n[Install]\nWantedBy=default.target\n"
     )
 }
 
 pub fn generate_launchd_plist(binary_path: &Path, config_path: &Path) -> String {
+    let bin = escape_xml(&sanitize_path_for_shell(binary_path));
+    let cfg = escape_xml(&sanitize_path_for_shell(config_path));
     format!(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict>\n  <key>Label</key>\n  <string>org.vortexinbox.daemon</string>\n  <key>ProgramArguments</key>\n  <array>\n    <string>{}</string>\n    <string>daemon</string>\n    <string>--config</string>\n    <string>{}</string>\n  </array>\n  <key>RunAtLoad</key>\n  <true/>\n  <key>KeepAlive</key>\n  <true/>\n</dict>\n</plist>\n",
-        binary_path.display(),
-        config_path.display()
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict>\n  <key>Label</key>\n  <string>org.vortexinbox.daemon</string>\n  <key>ProgramArguments</key>\n  <array>\n    <string>{bin}</string>\n    <string>daemon</string>\n    <string>--config</string>\n    <string>{cfg}</string>\n  </array>\n  <key>RunAtLoad</key>\n  <true/>\n  <key>KeepAlive</key>\n  <true/>\n</dict>\n</plist>\n"
     )
 }
 
 pub fn generate_windows_startup_script(binary_path: &Path, config_path: &Path) -> String {
-    format!(
-        "@echo off\r\nstart \"\" /B \"{}\" daemon --config \"{}\"\r\n",
-        binary_path.display(),
-        config_path.display()
-    )
+    let bin = sanitize_path_for_shell(binary_path);
+    let cfg = sanitize_path_for_shell(config_path);
+    format!("@echo off\r\nstart \"\" /B \"{bin}\" daemon --config \"{cfg}\"\r\n")
 }
 
 pub fn install_user_service(
@@ -63,7 +77,8 @@ pub fn verify_artifact_sha256(bytes: &[u8], expected_hex: &str) -> bool {
     let mut hasher = Sha256::new();
     hasher.update(bytes);
     let actual = hex_encode(&hasher.finalize());
-    actual.eq_ignore_ascii_case(expected_hex.trim())
+    let expected = expected_hex.trim().to_ascii_lowercase();
+    constant_time_eq(actual.as_bytes(), expected.as_bytes())
 }
 
 pub fn is_newer_version(current: &str, candidate: &str) -> bool {

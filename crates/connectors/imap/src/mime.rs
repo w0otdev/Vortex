@@ -29,13 +29,19 @@ pub fn parse_raw_email(
     let subject = find_header(&headers, "subject")
         .map(decode_rfc2047)
         .unwrap_or_default();
-    let message_id = find_header(&headers, "message-id")
-        .map(|s| {
-            s.trim_matches(|c| c == '<' || c == '>' || c == ' ')
-                .to_string()
-        })
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| external_id.to_string());
+    let message_id = if !external_id.trim().is_empty() {
+        external_id.trim().to_string()
+    } else {
+        find_header(&headers, "message-id")
+            .map(|s| {
+                s.trim_matches(|c| c == '<' || c == '>' || c == ' ')
+                    .chars()
+                    .filter(|c| !c.is_control())
+                    .collect::<String>()
+            })
+            .filter(|s| !s.is_empty())
+            .unwrap_or_default()
+    };
     let list_unsub = find_header(&headers, "list-unsubscribe").map(str::to_string);
     let precedence = find_header(&headers, "precedence").map(str::to_string);
     let content_type = find_header(&headers, "content-type").unwrap_or("text/plain");
@@ -66,7 +72,7 @@ pub fn parse_raw_email(
     };
 
     let mut links = extract_links_from_text(&effective_text);
-    for link in extract_links_from_text(&html_body) {
+    for link in extract_links_from_text(&sanitized_html) {
         if !links.iter().any(|l| l.url == link.url) {
             links.push(link);
         }
@@ -274,11 +280,13 @@ pub fn decode_rfc2047(input: &str) -> String {
 /// Sanitizes HTML by removing scripts, styles, hidden prompt-injection elements,
 /// event attributes, and remote tracking images.
 pub fn sanitize_html_safe(html: &str) -> String {
-    let mut cleaned = strip_tag_with_contents(html, "script");
-    cleaned = strip_tag_with_contents(&cleaned, "style");
-    cleaned = strip_tag_with_contents(&cleaned, "iframe");
-    cleaned = strip_tag_with_contents(&cleaned, "object");
-    cleaned = strip_tag_with_contents(&cleaned, "embed");
+    let mut cleaned = strip_html_comments(html);
+    for blocked_tag in [
+        "script", "style", "iframe", "object", "embed", "svg", "math", "form", "base", "meta",
+        "link", "template",
+    ] {
+        cleaned = strip_tag_with_contents(&cleaned, blocked_tag);
+    }
     cleaned = strip_hidden_elements(&cleaned);
 
     let mut out = String::with_capacity(cleaned.len());
@@ -290,17 +298,27 @@ pub fn sanitize_html_safe(html: &str) -> String {
             break;
         };
         let tag_content = &after_lt[..gt];
-        let tag_lower = tag_content.trim().to_ascii_lowercase();
+        let tag_decoded = decode_html_entities(tag_content).to_ascii_lowercase();
+        let tag_trimmed = tag_decoded.trim_start();
 
-        if tag_lower.starts_with("img")
-            && (tag_lower.contains("http://") || tag_lower.contains("https://"))
+        let is_img_tag = tag_trimmed.starts_with("img")
+            && tag_trimmed
+                .as_bytes()
+                .get(3)
+                .is_none_or(|b| b.is_ascii_whitespace() || *b == b'/');
+        if is_img_tag
+            && (tag_trimmed.contains("http://")
+                || tag_trimmed.contains("https://")
+                || tag_trimmed.contains("//"))
         {
             out.push_str("<span class=\"blocked-image\">[remote image blocked]</span>");
         } else {
             let safe_tag = sanitize_tag_attributes(tag_content);
-            out.push('<');
-            out.push_str(&safe_tag);
-            out.push('>');
+            if !safe_tag.is_empty() {
+                out.push('<');
+                out.push_str(&safe_tag);
+                out.push('>');
+            }
         }
         rest = &after_lt[gt + 1..];
     }
@@ -308,24 +326,120 @@ pub fn sanitize_html_safe(html: &str) -> String {
     strip_invisible_unicode(&out)
 }
 
-fn strip_tag_with_contents(html: &str, tag: &str) -> String {
-    let open_pat = format!("<{tag}");
-    let close_pat = format!("</{tag}>");
+fn strip_html_comments(html: &str) -> String {
     let mut current = html.to_string();
-    loop {
-        let lower = current.to_ascii_lowercase();
-        let Some(start) = lower.find(&open_pat) else {
-            break;
-        };
-        if let Some(rel_end) = lower[start..].find(&close_pat) {
-            let end = start + rel_end + close_pat.len();
-            current.replace_range(start..end, "");
+    while let Some(start) = current.find("<!--") {
+        if let Some(rel_end) = current[start + 4..].find("-->") {
+            current.replace_range(start..start + 4 + rel_end + 3, "");
         } else {
             current.replace_range(start.., "");
             break;
         }
     }
     current
+}
+
+fn strip_tag_with_contents(html: &str, tag: &str) -> String {
+    let open_pat = format!("<{tag}");
+    let close_pat = format!("</{tag}");
+    let mut current = html.to_string();
+    let mut search_from = 0usize;
+    loop {
+        if search_from >= current.len() {
+            break;
+        }
+        let lower = current.to_ascii_lowercase();
+        let Some(rel_start) = lower[search_from..].find(&open_pat) else {
+            break;
+        };
+        let start = search_from + rel_start;
+        let after_open = lower.as_bytes().get(start + open_pat.len()).copied();
+        if !matches!(
+            after_open,
+            None | Some(b' ' | b'>' | b'/' | b'\t' | b'\n' | b'\r')
+        ) {
+            search_from = start + open_pat.len();
+            continue;
+        }
+        if let Some(rel_gt) = lower[start..].find('>') {
+            let tag_slice = &lower[start..start + rel_gt];
+            if tag_slice.trim_end().ends_with('/') || matches!(tag, "meta" | "link" | "base") {
+                current.replace_range(start..start + rel_gt + 1, "");
+                search_from = start;
+                continue;
+            }
+        }
+        if let Some(rel_close) = lower[start..].find(&close_pat) {
+            let close_start = start + rel_close;
+            if let Some(close_gt) = lower[close_start..].find('>') {
+                current.replace_range(start..close_start + close_gt + 1, "");
+                search_from = start;
+            } else {
+                current.replace_range(start.., "");
+                break;
+            }
+        } else {
+            current.replace_range(start.., "");
+            break;
+        }
+    }
+    current
+}
+
+fn decode_html_entities(input: &str) -> String {
+    let s = input
+        .replace("&colon;", ":")
+        .replace("&tab;", "\t")
+        .replace("&newline;", "\n")
+        .replace("&amp;", "&")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&apos;", "'")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">");
+    if !s.contains("&#") {
+        return s;
+    }
+    let mut out = String::with_capacity(s.len());
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'&' && i + 2 < bytes.len() && bytes[i + 1] == b'#' {
+            let mut end = i + 2;
+            let is_hex = end < bytes.len() && matches!(bytes[end], b'x' | b'X');
+            if is_hex {
+                end += 1;
+            }
+            let num_start = end;
+            while end < bytes.len()
+                && ((is_hex && bytes[end].is_ascii_hexdigit())
+                    || (!is_hex && bytes[end].is_ascii_digit()))
+            {
+                end += 1;
+            }
+            if end > num_start {
+                let num_str = &s[num_start..end];
+                let parsed = if is_hex {
+                    u32::from_str_radix(num_str, 16).ok()
+                } else {
+                    num_str.parse::<u32>().ok()
+                };
+                if let Some(ch) = parsed.and_then(char::from_u32) {
+                    out.push(ch);
+                    i = if end < bytes.len() && bytes[end] == b';' {
+                        end + 1
+                    } else {
+                        end
+                    };
+                    continue;
+                }
+            }
+        }
+        let ch = s[i..].chars().next().unwrap_or(' ');
+        out.push(ch);
+        i += ch.len_utf8();
+    }
+    out
 }
 
 fn strip_hidden_elements(html: &str) -> String {
@@ -344,8 +458,18 @@ fn strip_hidden_elements(html: &str) -> String {
             .collect::<String>()
             .to_ascii_lowercase();
 
-        let is_hidden = compact.contains("display:none")
+        let has_hidden_attr = tag
+            .split(|c: char| c.is_whitespace() || c == '/')
+            .skip(1)
+            .any(|tok| {
+                let l = tok.to_ascii_lowercase();
+                l == "hidden" || l.starts_with("hidden=")
+            });
+        let is_hidden = has_hidden_attr
+            || compact.contains("display:none")
             || compact.contains("visibility:hidden")
+            || compact.contains("color:transparent")
+            || compact.contains("max-height:0")
             || compact.contains("opacity:0;")
             || compact.contains("opacity:0\"")
             || compact.contains("opacity:0'")
@@ -377,7 +501,10 @@ fn strip_hidden_elements(html: &str) -> String {
                     match (next_open, next_close) {
                         (Some(o), Some(c)) if o < c => {
                             let after_char = lower_rem.as_bytes().get(o + open_pat.len()).copied();
-                            if matches!(after_char, Some(b' ' | b'>' | b'/' | b'\t' | b'\n' | b'\r')) {
+                            if matches!(
+                                after_char,
+                                Some(b' ' | b'>' | b'/' | b'\t' | b'\n' | b'\r')
+                            ) {
                                 depth += 1;
                             }
                             cursor = o + open_pat.len();
@@ -414,20 +541,106 @@ fn strip_hidden_elements(html: &str) -> String {
 }
 
 fn sanitize_tag_attributes(tag: &str) -> String {
-    let mut parts = tag.split_whitespace();
-    let Some(name) = parts.next() else {
+    let trimmed = tag.trim();
+    if trimmed.is_empty() {
         return String::new();
+    }
+    let is_closing = trimmed.starts_with('/');
+    let after_slash = if is_closing {
+        trimmed[1..].trim_start()
+    } else {
+        trimmed
     };
+    let name_len = after_slash
+        .find(|c: char| !c.is_ascii_alphanumeric() && c != '-' && c != '!')
+        .unwrap_or(after_slash.len());
+    if name_len == 0 {
+        return String::new();
+    }
+    let name = &after_slash[..name_len];
+    if is_closing {
+        return format!("/{name}");
+    }
+
+    let mut rest = after_slash[name_len..].trim();
+    let self_closing = rest.ends_with('/');
+    if self_closing {
+        rest = rest[..rest.len() - 1].trim();
+    }
+
     let mut kept = vec![name.to_string()];
-    for attr in parts {
-        let lower = attr.to_ascii_lowercase();
-        if lower.starts_with("on")
-            || lower.contains("javascript:")
-            || lower.contains("data:text/html")
+    let bytes = rest.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        while i < bytes.len() && (bytes[i].is_ascii_whitespace() || bytes[i] == b'/') {
+            i += 1;
+        }
+        if i >= bytes.len() {
+            break;
+        }
+        let attr_start = i;
+        while i < bytes.len()
+            && !bytes[i].is_ascii_whitespace()
+            && !matches!(bytes[i], b'=' | b'/' | b'"' | b'\'')
+        {
+            i += 1;
+        }
+        let attr_name = rest[attr_start..i].to_ascii_lowercase();
+        while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        if i < bytes.len() && bytes[i] == b'=' {
+            i += 1;
+            while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+                i += 1;
+            }
+            if i < bytes.len() && (bytes[i] == b'"' || bytes[i] == b'\'') {
+                let quote = bytes[i];
+                i += 1;
+                while i < bytes.len() && bytes[i] != quote {
+                    i += 1;
+                }
+                if i < bytes.len() {
+                    i += 1;
+                }
+            } else {
+                while i < bytes.len()
+                    && !bytes[i].is_ascii_whitespace()
+                    && !matches!(bytes[i], b'/' | b'"' | b'\'')
+                {
+                    i += 1;
+                }
+            }
+        } else if attr_name.is_empty() {
+            i += 1;
+            continue;
+        }
+
+        let raw_attr = rest[attr_start..i].trim();
+        if raw_attr.is_empty() || attr_name.is_empty() {
+            continue;
+        }
+        let decoded_compact: String = decode_html_entities(raw_attr)
+            .chars()
+            .filter(|c| !c.is_whitespace() && !c.is_control())
+            .collect::<String>()
+            .to_ascii_lowercase();
+
+        if attr_name.starts_with("on")
+            || matches!(attr_name.as_str(), "srcdoc" | "formaction")
+            || decoded_compact.contains("javascript:")
+            || decoded_compact.contains("vbscript:")
+            || decoded_compact.contains("data:text/html")
+            || decoded_compact.contains("data:image/svg")
+            || (attr_name == "style"
+                && (decoded_compact.contains("url(") || decoded_compact.contains("expression(")))
         {
             continue;
         }
-        kept.push(attr.to_string());
+        kept.push(raw_attr.to_string());
+    }
+    if self_closing {
+        kept.push("/".to_string());
     }
     kept.join(" ")
 }
@@ -528,7 +741,8 @@ pub fn extract_url_domain(url: &str) -> String {
         .strip_prefix("https://")
         .or_else(|| url.strip_prefix("http://"))
         .unwrap_or(url);
-    let host_port = without_scheme.split('/').next().unwrap_or("");
+    let authority = without_scheme.split(['/', '?', '#']).next().unwrap_or("");
+    let host_port = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
     let host = host_port.split(':').next().unwrap_or("");
     host.trim_start_matches("www.").to_ascii_lowercase()
 }

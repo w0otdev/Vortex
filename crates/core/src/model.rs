@@ -338,17 +338,62 @@ pub trait Connector: Send {
 
 pub fn extract_email_domain(sender: &str) -> String {
     let trimmed = sender.trim();
-    let addr = if let Some((_, after_lt)) = trimmed.rsplit_once('<') {
-        after_lt.trim_end_matches('>').trim()
-    } else {
-        trimmed
-    };
+    let addr = trimmed
+        .rsplit('<')
+        .filter_map(|seg| seg.split_once('>').map(|(inside, _)| inside.trim()))
+        .find(|inside| inside.contains('@'))
+        .unwrap_or_else(|| {
+            trimmed
+                .rsplit_once('<')
+                .map(|(_, after_lt)| after_lt.trim_end_matches('>').trim())
+                .unwrap_or(trimmed)
+        });
     addr.rsplit_once('@')
         .map(|(_, d)| {
             d.trim_matches(|c: char| !c.is_ascii_alphanumeric() && c != '.' && c != '-')
                 .to_ascii_lowercase()
         })
         .unwrap_or_default()
+}
+
+pub fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    a.iter()
+        .zip(b.iter())
+        .fold(0u8, |acc, (x, y)| acc | (x ^ y))
+        == 0
+}
+
+pub fn generate_random_bytes_32(domain: &[u8], extra_seed: u64) -> [u8; 32] {
+    use std::collections::hash_map::RandomState;
+    use std::hash::{BuildHasher, Hasher};
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    static COUNTER: AtomicU64 = AtomicU64::new(1);
+    let seq = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+
+    let mut hasher = Sha256::new();
+    hasher.update(domain);
+    hasher.update(extra_seed.to_le_bytes());
+    hasher.update(seq.to_le_bytes());
+    hasher.update(nanos.to_le_bytes());
+    hasher.update(std::process::id().to_le_bytes());
+    for i in 0..4u64 {
+        let mut h = RandomState::new().build_hasher();
+        h.write_u64(seq.wrapping_add(i));
+        hasher.update(h.finish().to_le_bytes());
+    }
+    let digest = hasher.finalize();
+    let mut out = [0u8; 32];
+    out.copy_from_slice(&digest);
+    out
 }
 
 pub fn hex_encode(bytes: &[u8]) -> String {

@@ -1,8 +1,11 @@
 #![cfg_attr(target_os = "windows", windows_subsystem = "windows")]
 
 use std::env;
+#[cfg(target_os = "windows")]
 use std::io::{Read, Write};
-use std::net::{TcpListener, TcpStream};
+use std::net::TcpListener;
+#[cfg(target_os = "windows")]
+use std::net::TcpStream;
 use std::path::Path;
 use std::process::ExitCode;
 use std::sync::{Arc, Mutex};
@@ -82,9 +85,28 @@ fn run_check_budgets(args: &[String]) -> ExitCode {
     ExitCode::SUCCESS
 }
 
+#[cfg(target_os = "windows")]
+fn portable_data_dir() -> Option<std::path::PathBuf> {
+    let exe = env::current_exe().ok()?;
+    let dir = exe.parent()?.join("data");
+    dir.is_dir().then_some(dir)
+}
+
 fn open_state(args: &[String]) -> Result<DaemonState, String> {
-    let cfg_path = flag_str(args, "--config").unwrap_or("vortex.toml");
-    DaemonState::open_from_config(Path::new(cfg_path))
+    if let Some(cfg) = flag_str(args, "--config") {
+        return DaemonState::open_from_config(Path::new(cfg));
+    }
+    if let Some(exe_cfg) = env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.join("vortex.toml")))
+        && exe_cfg.is_file()
+    {
+        if let Some(dir) = exe_cfg.parent() {
+            let _ = env::set_current_dir(dir);
+        }
+        return DaemonState::open_from_config(&exe_cfg);
+    }
+    DaemonState::open_from_config(Path::new("vortex.toml"))
 }
 
 fn run_status(args: &[String]) -> ExitCode {
@@ -484,7 +506,9 @@ fn run_native_window(url: &str, state: Arc<Mutex<DaemonState>>) -> ExitCode {
     };
 
     let main_proxy = event_loop.create_proxy();
-    let data_dir = env::temp_dir().join("vortex-inbox-webview2");
+    let data_dir = portable_data_dir()
+        .map(|d| d.join("webview2-inbox"))
+        .unwrap_or_else(|| env::temp_dir().join("vortex-inbox-webview2"));
     let mut web_context = WebContext::new(Some(data_dir));
     let webview = match WebViewBuilder::with_web_context(&mut web_context)
         .with_url(url)
@@ -580,9 +604,16 @@ fn run_native_window(url: &str, state: Arc<Mutex<DaemonState>>) -> ExitCode {
         let mut previous = Vec::new();
         loop {
             let current = state.lock().ok().and_then(|guard| {
-                guard.store.list_recent_codes(now_epoch()).ok().map(|codes| {
-                    codes.into_iter().map(|code| code.code_hash).collect::<Vec<_>>()
-                })
+                guard
+                    .store
+                    .list_recent_codes(now_epoch())
+                    .ok()
+                    .map(|codes| {
+                        codes
+                            .into_iter()
+                            .map(|code| code.code_hash)
+                            .collect::<Vec<_>>()
+                    })
             });
             if let Some(current) = current
                 && current != previous
@@ -1242,7 +1273,9 @@ fn run_google_login_window(args: &[String]) -> ExitCode {
         Err(_) => return ExitCode::FAILURE,
     };
 
-    let data_dir = env::temp_dir().join("vortex-google-signin-profile");
+    let data_dir = portable_data_dir()
+        .map(|d| d.join("webview2-google"))
+        .unwrap_or_else(|| env::temp_dir().join("vortex-google-signin-profile"));
     let mut web_context = WebContext::new(Some(data_dir));
     let bind_for_ipc = bind.clone();
     let fallback_email = initial_email.clone();
@@ -1283,8 +1316,20 @@ fn run_google_login_window(args: &[String]) -> ExitCode {
                 }
                 let secret = raw_secret.trim().to_string();
                 if !email.is_empty() && !secret.is_empty() {
+                    let esc_email = email
+                        .chars()
+                        .filter(|c| !c.is_control())
+                        .collect::<String>()
+                        .replace('\\', "\\\\")
+                        .replace('"', "\\\"");
+                    let esc_secret = secret
+                        .chars()
+                        .filter(|c| !c.is_control())
+                        .collect::<String>()
+                        .replace('\\', "\\\\")
+                        .replace('"', "\\\"");
                     let payload = format!(
-                        "{{\"id\":\"{email}\",\"source\":\"email\",\"email_or_handle\":\"{email}\",\"host\":\"imap.gmail.com\",\"port\":993,\"use_tls\":true,\"secret\":\"{secret}\"}}"
+                        "{{\"id\":\"{esc_email}\",\"source\":\"email\",\"email_or_handle\":\"{esc_email}\",\"host\":\"imap.gmail.com\",\"port\":993,\"use_tls\":true,\"secret\":\"{esc_secret}\"}}"
                     );
                     if let Ok(mut stream) = TcpStream::connect(&bind_for_ipc) {
                         let _ = stream.set_read_timeout(Some(Duration::from_secs(20)));

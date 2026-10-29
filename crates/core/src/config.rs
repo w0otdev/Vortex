@@ -5,6 +5,7 @@ use std::fs;
 use std::path::Path;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AppConfig {
     #[serde(default = "default_profile")]
     pub profile: String,
@@ -72,6 +73,7 @@ impl Default for AppConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AccountConfig {
     pub id: String,
     pub source: SourceKind,
@@ -100,6 +102,7 @@ fn default_auth_method() -> String {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct UserRuleConfig {
     pub name: String,
     pub match_sender: Option<String>,
@@ -115,9 +118,12 @@ pub struct UserRuleConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AiConfig {
     #[serde(default)]
     pub enabled: bool,
+    #[serde(default)]
+    pub auto_hide: bool,
     #[serde(default = "default_ai_provider")]
     pub provider: String,
     #[serde(default = "default_ai_endpoint")]
@@ -147,6 +153,7 @@ impl Default for AiConfig {
     fn default() -> Self {
         Self {
             enabled: false,
+            auto_hide: false,
             provider: default_ai_provider(),
             endpoint: default_ai_endpoint(),
             small_model: default_small_model(),
@@ -157,6 +164,7 @@ impl Default for AiConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct HubConfig {
     #[serde(default = "default_hub_mode")]
     pub mode: String,
@@ -198,19 +206,34 @@ impl AppConfig {
 
     pub fn parse_and_validate(raw_toml: &str) -> Result<Self, String> {
         // Security gate: reject config files that attempt to embed raw secrets or passwords.
-        let lower = raw_toml.to_ascii_lowercase();
-        for forbidden in [
-            "password =",
-            "password=",
-            "api_key =",
-            "api_key=",
-            "secret =",
-        ] {
-            if lower.contains(forbidden) {
-                return Err(
-                    "secrets are forbidden in config files; store credentials in the OS keyring"
-                        .into(),
-                );
+        for line in raw_toml.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() || trimmed.starts_with('#') || trimmed.starts_with('[') {
+                continue;
+            }
+            if let Some((raw_key, _)) = trimmed.split_once('=') {
+                let key = raw_key
+                    .trim()
+                    .trim_matches('"')
+                    .trim_matches('\'')
+                    .to_ascii_lowercase();
+                if matches!(
+                    key.as_str(),
+                    "password"
+                        | "api_key"
+                        | "apikey"
+                        | "secret"
+                        | "token"
+                        | "bot_token"
+                        | "client_secret"
+                        | "refresh_token"
+                        | "access_token"
+                ) {
+                    return Err(
+                        "secrets are forbidden in config files; store credentials in the OS keyring"
+                            .into(),
+                    );
+                }
             }
         }
         let mut cfg: Self =

@@ -1,3 +1,4 @@
+mod assistant;
 pub mod connectors;
 pub mod hub;
 pub mod notify;
@@ -12,8 +13,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use vortex_classify::ai::{
-    answer_mailbox_qa, build_ai_preview, compute_local_embedding, execute_ai_proposal,
-    generate_daily_digest,
+    answer_mailbox_qa, build_ai_preview, compute_local_embedding, generate_daily_digest,
 };
 use vortex_classify::classify_and_enrich;
 use vortex_core::config::{AccountConfig, AppConfig, UserRuleConfig};
@@ -63,14 +63,11 @@ pub fn process_new_item(
     user_rules: &[UserRuleConfig],
     cfg: &AppConfig,
     policy: &TierRuntimePolicy,
-    secrets: &SecretStore,
+    _secrets: &SecretStore,
 ) -> Result<PipelineResult, String> {
-    if let Some(prev_ts) = store.get_existing_received_at(
-        item.source,
-        &item.account,
-        &item.external_id,
-        &item.subject,
-    ) && prev_ts > 0
+    if let Some(prev_ts) =
+        store.get_existing_received_at(item.source, &item.account, &item.external_id, &item.subject)
+        && prev_ts > 0
         && prev_ts < item.received_at
     {
         item.received_at = prev_ts;
@@ -88,54 +85,25 @@ pub fn process_new_item(
     }
 
     // 2. BACKGROUND PATH: rule-based classification, phishing guard, entities, user rules.
-    let outcome = classify_and_enrich(&mut item, now_epoch, &blocked_patterns, user_rules);
+    classify_and_enrich(&mut item, now_epoch, &blocked_patterns, user_rules);
 
     if let Some(ref mut popup) = fast_popup {
         popup.phishing_warning = item.phishing_warning.clone();
     }
 
-    // Optional AI classification only when rules are uncertain, AI is enabled, and not on battery.
-    if outcome.uncertain && cfg.ai.enabled && policy.ai_allowed_now {
-        let c_hash = item.content_hash();
-        if let Ok(Some(cached)) = store.get_ai_cache(&c_hash, "classify") {
-            if let Ok(prop) = vortex_classify::ai::validate_ai_proposal_json(&cached) {
-                item.category = prop.category;
-                item.summary = Some(prop.summary);
-                item.priority_score = prop.priority_score;
-            }
-        } else if !store.is_disk_backpressured()
-            && let Ok((prop, preview)) = execute_ai_proposal(&item, "classify", &cfg.ai, secrets)
-        {
-            let _ = store.log_ai_call(
-                now_epoch,
-                &preview.provider,
-                &preview.model,
-                &preview.task,
-                preview.estimated_tokens,
-                &preview.redacted_user_data,
-            );
-            if let Ok(json) = serde_json::to_string(&prop) {
-                let _ = store.set_ai_cache(&c_hash, "classify", &json, now_epoch);
-            }
-            item.category = prop.category;
-            item.summary = Some(prop.summary);
-            item.priority_score = prop.priority_score;
-        }
-    }
-
     let item_id = store.upsert_item(&item)?;
-    let stored_hidden = store
-        .get_item(item_id)
-        .ok()
-        .flatten()
-        .is_some_and(|st| {
-            matches!(
-                st.state,
-                vortex_core::model::ItemState::Trash
-                    | vortex_core::model::ItemState::Archived
-                    | vortex_core::model::ItemState::Spam
-            )
-        });
+    // Queue only IDs in SQLite; provider I/O never delays storing mail or OTPs.
+    if cfg.ai.enabled && policy.ai_allowed_now && !store.is_disk_backpressured() {
+        let _ = assistant::queue_item(store, item_id, &cfg.ai, false);
+    }
+    let stored_hidden = store.get_item(item_id).ok().flatten().is_some_and(|st| {
+        matches!(
+            st.state,
+            vortex_core::model::ItemState::Trash
+                | vortex_core::model::ItemState::Archived
+                | vortex_core::model::ItemState::Spam
+        )
+    });
 
     if policy.semantic_search_enabled && !stored_hidden {
         let emb_text = format!("{} {} {}", item.sender, item.subject, item.body_text);
@@ -143,14 +111,22 @@ pub fn process_new_item(
         let _ = store.upsert_embedding(item_id, &vec);
     }
 
-    if !stored_hidden && let Some(ref mut popup) = fast_popup {
+    if stored_hidden
+        || fast_popup
+            .as_ref()
+            .is_some_and(|p| p.expires_at <= now_epoch)
+    {
+        fast_popup = None;
+    }
+
+    if let Some(ref mut popup) = fast_popup {
         popup.item_id = item_id;
         popup.code_hash = OtpPopupEvent::compute_dedup_hash(
             &format!("{}:{}", item.account, item.subject),
             &popup.code,
         );
         let is_new = store.record_recent_code(popup)?;
-        if is_new && popup.expires_at > now_epoch && policy.tray_enabled {
+        if is_new && policy.tray_enabled {
             let _ = emit_os_otp_notification(popup);
         }
     }
@@ -167,17 +143,32 @@ pub fn fetch_account_items(
     last_uid: u32,
     secrets: &SecretStore,
 ) -> Result<(Vec<Item>, Option<ImapConnector>), String> {
-    if account.source != SourceKind::Email {
-        return Ok((Vec::new(), None));
+    match account.source {
+        SourceKind::Email => {
+            if account.auth_method == "google_web" || account.host == "session.gmail.com" {
+                return Ok((Vec::new(), None));
+            }
+            let mut imap =
+                ImapConnector::new(account.clone(), secrets.clone()).with_last_seen_uid(last_uid);
+            imap.connect()?;
+            let fetched = imap.sync(None)?;
+            Ok((fetched, Some(imap)))
+        }
+        SourceKind::Rss => {
+            let mut rss = connectors::RssConnector::new(account.clone());
+            rss.connect()?;
+            let fetched = rss.sync(None)?;
+            Ok((fetched, None))
+        }
+        SourceKind::Telegram => {
+            let mut tg = connectors::TelegramBotConnector::new(account.clone(), secrets.clone())
+                .with_last_update_id(i64::from(last_uid));
+            tg.connect()?;
+            let fetched = tg.sync(None)?;
+            Ok((fetched, None))
+        }
+        _ => Ok((Vec::new(), None)),
     }
-    if account.auth_method == "google_web" || account.host == "session.gmail.com" {
-        return Ok((Vec::new(), None));
-    }
-    let mut imap =
-        ImapConnector::new(account.clone(), secrets.clone()).with_last_seen_uid(last_uid);
-    imap.connect()?;
-    let fetched = imap.sync(None)?;
-    Ok((fetched, Some(imap)))
 }
 
 pub fn sync_single_account(
@@ -189,9 +180,9 @@ pub fn sync_single_account(
 ) -> Result<Vec<PipelineResult>, String> {
     let rules = store.list_user_rules().unwrap_or_default();
     let now = now_epoch();
-    let last_uid = if account.source == SourceKind::Email {
+    let last_uid = if matches!(account.source, SourceKind::Email | SourceKind::Telegram) {
         store
-            .max_numeric_external_id(SourceKind::Email, &account.id)
+            .max_numeric_external_id(account.source, &account.id)
             .unwrap_or(0)
     } else {
         0
@@ -323,10 +314,10 @@ pub fn sync_accounts_concurrent(
             {
                 continue;
             }
-            let last_uid = if acc.source == SourceKind::Email {
+            let last_uid = if matches!(acc.source, SourceKind::Email | SourceKind::Telegram) {
                 guard
                     .store
-                    .max_numeric_external_id(SourceKind::Email, &acc.id)
+                    .max_numeric_external_id(acc.source, &acc.id)
                     .unwrap_or(0)
             } else {
                 0
@@ -355,7 +346,7 @@ pub fn sync_accounts_concurrent(
             std::sync::atomic::AtomicI64::new(0);
         let now_s = now_epoch();
         let prev_s = LAST_GWEB_SPAWN_SEC.load(std::sync::atomic::Ordering::Relaxed);
-        if now_s - prev_s >= 2 {
+        if now_s - prev_s >= 25 {
             LAST_GWEB_SPAWN_SEC.store(now_s, std::sync::atomic::Ordering::Relaxed);
             if let Ok(exe) = std::env::current_exe() {
                 let joined = google_emails.join(",");
@@ -368,69 +359,99 @@ pub fn sync_accounts_concurrent(
                     &joined,
                     "--silent",
                 ]);
-                let _ = cmd.spawn();
+                if let Ok(mut child) = cmd.spawn() {
+                    std::thread::spawn(move || {
+                        let _ = child.wait();
+                    });
+                }
             }
         }
     }
 
-    // shortcut: 8 concurrent socket workers per batch, upgrade to async pool if >64 accounts
-    for chunk in imap_jobs.chunks(8) {
-        let chunk_outcomes: Vec<(String, Result<usize, String>)> = std::thread::scope(|s| {
-            let mut handles = Vec::with_capacity(chunk.len());
-            for (acc, last_uid) in chunk {
+    if !imap_jobs.is_empty() {
+        let worker_count = imap_jobs.len().min(16);
+        let next_idx = std::sync::atomic::AtomicUsize::new(0);
+        let jobs_ref = &imap_jobs;
+        let next_ref = &next_idx;
+        let outcomes: Vec<(String, Result<usize, String>)> = std::thread::scope(|s| {
+            let mut handles = Vec::with_capacity(worker_count);
+            for _ in 0..worker_count {
                 let st = Arc::clone(state);
                 let sec = secrets.clone();
                 handles.push(s.spawn(move || {
-                    let (fetched, mut imap_opt) = match fetch_account_items(acc, *last_uid, &sec) {
-                        Ok(pair) => pair,
-                        Err(e) => return (acc.id.clone(), Err(e)),
-                    };
-                    let count = fetched.len();
-                    let mut label_tasks = Vec::new();
-                    if !fetched.is_empty() {
-                        let Ok(guard) = st.lock() else {
-                            return (acc.id.clone(), Err("state lock poisoned".into()));
+                    let mut worker_outcomes = Vec::new();
+                    loop {
+                        let idx = next_ref.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        let Some((acc, last_uid)) = jobs_ref.get(idx) else {
+                            break;
                         };
-                        let rules = guard.store.list_user_rules().unwrap_or_default();
-                        let now = now_epoch();
-                        for item in fetched {
-                            let ext_uid = item.external_id.clone();
-                            match process_new_item(
-                                &guard.store,
-                                item,
-                                now,
-                                &rules,
-                                &guard.config,
-                                &guard.policy,
-                                &guard.secrets,
-                            ) {
-                                Ok(res) => {
-                                    if acc.gmail_writeback_labels {
-                                        label_tasks.push((
-                                            ext_uid,
-                                            res.category.gmail_sublabel().to_string(),
-                                        ));
+                        let (fetched, mut imap_opt) =
+                            match fetch_account_items(acc, *last_uid, &sec) {
+                                Ok(pair) => pair,
+                                Err(e) => {
+                                    worker_outcomes.push((acc.id.clone(), Err(e)));
+                                    continue;
+                                }
+                            };
+                        let count = fetched.len();
+                        let mut label_tasks = Vec::new();
+                        let mut item_err = None;
+                        if !fetched.is_empty() {
+                            let Ok(guard) = st.lock() else {
+                                worker_outcomes
+                                    .push((acc.id.clone(), Err("state lock poisoned".into())));
+                                continue;
+                            };
+                            let rules = guard.store.list_user_rules().unwrap_or_default();
+                            let now = now_epoch();
+                            for item in fetched {
+                                let ext_uid = item.external_id.clone();
+                                match process_new_item(
+                                    &guard.store,
+                                    item,
+                                    now,
+                                    &rules,
+                                    &guard.config,
+                                    &guard.policy,
+                                    &guard.secrets,
+                                ) {
+                                    Ok(res) => {
+                                        if acc.gmail_writeback_labels {
+                                            label_tasks.push((
+                                                ext_uid,
+                                                res.category.gmail_sublabel().to_string(),
+                                            ));
+                                        }
+                                    }
+                                    Err(e) => {
+                                        item_err = Some(e);
+                                        break;
                                     }
                                 }
-                                Err(e) => return (acc.id.clone(), Err(e)),
                             }
                         }
-                    }
-                    if let Some(ref mut imap) = imap_opt {
-                        for (uid, lbl) in label_tasks {
-                            let _ = imap.apply_gmail_label(&uid, &lbl);
+                        if let Some(e) = item_err {
+                            worker_outcomes.push((acc.id.clone(), Err(e)));
+                            continue;
                         }
+                        if let Some(ref mut imap) = imap_opt {
+                            for (uid, lbl) in label_tasks {
+                                let _ = imap.apply_gmail_label(&uid, &lbl);
+                            }
+                        }
+                        worker_outcomes.push((acc.id.clone(), Ok(count)));
                     }
-                    (acc.id.clone(), Ok(count))
+                    worker_outcomes
                 }));
             }
             handles
                 .into_iter()
                 .filter_map(|h| h.join().ok())
+                .flatten()
                 .collect()
         });
 
-        for (_acc_id, res) in chunk_outcomes {
+        for (_acc_id, res) in outcomes {
             match res {
                 Ok(n) => {
                     synced_count += n;
@@ -467,11 +488,16 @@ pub struct DaemonState {
     pub policy: TierRuntimePolicy,
     pub secrets: SecretStore,
     pub clipboard: ClipboardGuard,
+    ai_worker_running: bool,
+    ai_busy: bool,
+    ai_generation: u64,
+    ai_last_error: Option<String>,
+    ai_revision: u64,
 }
 
 impl DaemonState {
     pub fn open_from_config(config_path: &Path) -> Result<Self, String> {
-        let config = AppConfig::load_or_default(config_path)?;
+        let mut config = AppConfig::load_or_default(config_path)?;
         let probe = HardwareProbe::detect();
         let policy = TierRuntimePolicy::compute(&probe, config.profile_mode(), config.ai.enabled);
         let secrets = SecretStore::new_os();
@@ -485,8 +511,18 @@ impl DaemonState {
             policy.fts_prefix_indexes,
             enc_key.as_deref(),
         )?;
+        if let Some(saved) = store.get_setting("ai")? {
+            config.ai = serde_json::from_str(&saved)
+                .map_err(|e| format!("invalid saved AI settings: {e}"))?;
+        }
+        let policy = TierRuntimePolicy::compute(&probe, config.profile_mode(), config.ai.enabled);
+        let saved_accounts = store.list_accounts()?;
         for acc in &config.accounts {
-            let _ = store.save_account(acc);
+            let mut account = acc.clone();
+            if let Some(saved) = saved_accounts.iter().find(|saved| saved.id == acc.id) {
+                account.ai_enabled = saved.ai_enabled;
+            }
+            store.save_account(&account)?;
         }
         for rule in &config.rules {
             let _ = store.save_user_rule(rule);
@@ -499,6 +535,11 @@ impl DaemonState {
             policy,
             secrets,
             clipboard,
+            ai_worker_running: false,
+            ai_busy: false,
+            ai_generation: 0,
+            ai_last_error: None,
+            ai_revision: 0,
         })
     }
 }
@@ -513,6 +554,7 @@ pub fn run_http_daemon_with_listener(
     listener: TcpListener,
     state: Arc<Mutex<DaemonState>>,
 ) -> Result<(), String> {
+    assistant::start_worker(&state)?;
     for stream in listener.incoming().flatten() {
         let st = Arc::clone(&state);
         std::thread::spawn(move || {
@@ -543,8 +585,10 @@ pub fn handle_http_connection(
     let (path, query) = full_path.split_once('?').unwrap_or((full_path, ""));
 
     let mut content_length = 0usize;
+    let mut host_header: Option<String> = None;
     let mut origin_header: Option<String> = None;
-    loop {
+    let mut sec_fetch_site: Option<String> = None;
+    for _ in 0..128 {
         let mut line = String::new();
         let n = reader.read_line(&mut line).unwrap_or(0);
         if n == 0 || line == "\r\n" || line == "\n" {
@@ -554,28 +598,55 @@ pub fn handle_http_connection(
             let key = k.trim();
             if key.eq_ignore_ascii_case("content-length") {
                 content_length = v.trim().parse().unwrap_or(0);
+            } else if key.eq_ignore_ascii_case("host") {
+                host_header = Some(v.trim().to_ascii_lowercase());
             } else if key.eq_ignore_ascii_case("origin") {
                 origin_header = Some(v.trim().to_ascii_lowercase());
+            } else if key.eq_ignore_ascii_case("sec-fetch-site") {
+                sec_fetch_site = Some(v.trim().to_ascii_lowercase());
             }
         }
     }
 
-    if method == "POST"
-        && let Some(ref orig) = origin_header
-        && !orig.starts_with("http://127.0.0.1")
-        && !orig.starts_with("http://localhost")
+    if let Some(ref h) = host_header
+        && !is_loopback_authority(h)
     {
-        return write_http_response(
-            &mut stream,
-            403,
-            "text/plain",
-            "forbidden cross-origin request",
-        );
+        return write_http_response(&mut stream, 403, "text/plain", "forbidden host header");
     }
 
-    let mut body_bytes = vec![0u8; content_length.min(2 * 1024 * 1024)];
+    if method == "POST" {
+        if sec_fetch_site.as_deref() == Some("cross-site") {
+            return write_http_response(
+                &mut stream,
+                403,
+                "text/plain",
+                "forbidden cross-site request",
+            );
+        }
+        if let Some(ref orig) = origin_header {
+            let valid_origin = orig
+                .strip_prefix("http://")
+                .or_else(|| orig.strip_prefix("https://"))
+                .is_some_and(is_loopback_authority);
+            if !valid_origin {
+                return write_http_response(
+                    &mut stream,
+                    403,
+                    "text/plain",
+                    "forbidden cross-origin request",
+                );
+            }
+        }
+    }
+
+    if content_length > 2 * 1024 * 1024 {
+        return write_http_response(&mut stream, 400, "text/plain", "payload too large");
+    }
+    let mut body_bytes = vec![0u8; content_length];
     if !body_bytes.is_empty() {
-        let _ = reader.read_exact(&mut body_bytes);
+        reader
+            .read_exact(&mut body_bytes)
+            .map_err(|e| format!("failed reading request body: {e}"))?;
     }
     let body_str = String::from_utf8_lossy(&body_bytes);
 
@@ -584,8 +655,7 @@ pub fn handle_http_connection(
             &mut stream,
             200,
             "text/html; charset=utf-8",
-            &std::fs::read_to_string("crates/ui-web/src/otp_overlay.html")
-                .unwrap_or_else(|_| OTP_OVERLAY_HTML.to_string()),
+            &load_live_overlay_html(),
         ),
         ("GET", "/") => write_http_response(
             &mut stream,
@@ -605,6 +675,9 @@ pub fn handle_http_connection(
             "application/javascript; charset=utf-8",
             &load_live_ui_asset("APP_JS", APP_JS),
         ),
+        ("GET", "/click.m4a") => {
+            write_http_bytes(&mut stream, 200, "audio/mp4", vortex_ui_web::CLICK_AUDIO)
+        }
         ("GET", "/api/ui-mtime") => write_http_response(
             &mut stream,
             200,
@@ -622,16 +695,8 @@ pub fn handle_http_connection(
             let accounts = guard.store.list_accounts().unwrap_or_default();
             let items_count = guard
                 .store
-                .list_items(&ItemFilter {
-                    limit: 500,
-                    ..Default::default()
-                })
-                .map(|v| {
-                    v.iter()
-                        .fold(v.len(), |acc, it| {
-                            acc.wrapping_add(it.body_html.len()).wrapping_add(it.body_text.len())
-                        })
-                })
+                .status_digest()
+                .map(|(cnt, total_len)| cnt.wrapping_add(total_len))
                 .unwrap_or(0);
             let mut missing_secret_accounts = Vec::new();
             for a in &accounts {
@@ -653,6 +718,7 @@ pub fn handle_http_connection(
                 "items_count": items_count,
                 "missing_secret_accounts": missing_secret_accounts,
                 "disk_backpressured": guard.store.is_disk_backpressured(),
+                "ai_revision": guard.ai_revision,
             });
             write_http_response(&mut stream, 200, "application/json", &json.to_string())
         }
@@ -737,7 +803,12 @@ pub fn handle_http_connection(
                     let _ = sync_accounts_concurrent(&bg_state, Some(&acc_id), &local_bind);
                 });
                 let resp = serde_json::json!({ "ok": true, "synced": 0, "queued": true });
-                return write_http_response(&mut stream, 200, "application/json", &resp.to_string());
+                return write_http_response(
+                    &mut stream,
+                    200,
+                    "application/json",
+                    &resp.to_string(),
+                );
             }
 
             match fetch_account_items(&acc, 0, &secrets) {
@@ -838,7 +909,12 @@ pub fn handle_http_connection(
                     "queued": true,
                     "failed": [],
                 });
-                return write_http_response(&mut stream, 200, "application/json", &resp.to_string());
+                return write_http_response(
+                    &mut stream,
+                    200,
+                    "application/json",
+                    &resp.to_string(),
+                );
             }
 
             let secrets = {
@@ -863,15 +939,12 @@ pub fn handle_http_connection(
                             let acc_clone = acc.clone();
                             let sec_clone = secrets.clone();
                             handles.push(s.spawn(move || {
-                                let res =
-                                    fetch_account_items(&acc_clone, 0, &sec_clone).map(|(it, _)| it);
+                                let res = fetch_account_items(&acc_clone, 0, &sec_clone)
+                                    .map(|(it, _)| it);
                                 (acc_clone, res)
                             }));
                         }
-                        handles
-                            .into_iter()
-                            .filter_map(|h| h.join().ok())
-                            .collect()
+                        handles.into_iter().filter_map(|h| h.join().ok()).collect()
                     });
 
                 if let Ok(guard) = state.lock() {
@@ -922,7 +995,12 @@ pub fn handle_http_connection(
             } else {
                 400
             };
-            write_http_response(&mut stream, status_code, "application/json", &resp.to_string())
+            write_http_response(
+                &mut stream,
+                status_code,
+                "application/json",
+                &resp.to_string(),
+            )
         }
         ("POST", "/api/google-login") => {
             let v: serde_json::Value =
@@ -943,7 +1021,11 @@ pub fn handle_http_connection(
                 if !email.is_empty() {
                     cmd.args(["--email", &email]);
                 }
-                let _ = cmd.spawn();
+                if let Ok(mut child) = cmd.spawn() {
+                    std::thread::spawn(move || {
+                        let _ = child.wait();
+                    });
+                }
             }
             write_http_response(&mut stream, 200, "application/json", "{\"ok\":true}")
         }
@@ -959,7 +1041,7 @@ pub fn handle_http_connection(
             if email.is_empty() {
                 return write_http_response(&mut stream, 400, "text/plain", "missing email");
             }
-            let acc = AccountConfig {
+            let mut acc = AccountConfig {
                 id: email.clone(),
                 source: SourceKind::Email,
                 email_or_handle: email.clone(),
@@ -975,6 +1057,14 @@ pub fn handle_http_connection(
             let guard = state
                 .lock()
                 .map_err(|_| "state lock poisoned".to_string())?;
+            if let Some(existing) = guard
+                .store
+                .list_accounts()?
+                .into_iter()
+                .find(|a| a.id == acc.id)
+            {
+                acc.ai_enabled = existing.ai_enabled;
+            }
             let _ = guard.secrets.set_secret(&acc.id, "__google_web_session__");
             guard.store.save_account(&acc)?;
 
@@ -990,10 +1080,7 @@ pub fn handle_http_connection(
                         .filter(|s| !s.trim().is_empty())
                         .map(|s| s.trim().to_string())
                         .unwrap_or_else(|| format!("gweb-{now}-{idx}"));
-                    let unread = msg
-                        .get("unread")
-                        .and_then(|x| x.as_bool())
-                        .unwrap_or(true);
+                    let unread = msg.get("unread").and_then(|x| x.as_bool()).unwrap_or(true);
                     let received_at = msg
                         .get("received_at")
                         .and_then(|x| x.as_i64())
@@ -1116,7 +1203,18 @@ pub fn handle_http_connection(
                 .map_err(|_| "state lock poisoned".to_string())?;
             let q = query_param(query, "q");
             let account = query_param(query, "account").filter(|s| !s.is_empty());
-            let items = if let Some(search_q) = q.filter(|s| !s.is_empty()) {
+            let items = if query_param(query, "hidden").as_deref() == Some("1") {
+                let mut items = guard.store.list_ai_hidden(account.as_deref(), 120)?;
+                if let Some(q) = q.filter(|s| !s.is_empty()) {
+                    let q = q.to_lowercase();
+                    items.retain(|i| {
+                        format!("{} {}", i.sender, i.subject)
+                            .to_lowercase()
+                            .contains(&q)
+                    });
+                }
+                items
+            } else if let Some(search_q) = q.filter(|s| !s.is_empty()) {
                 let mut res = guard.store.search_fts(&search_q, 80)?;
                 if let Some(ref acc_id) = account {
                     res.retain(|it| &it.account == acc_id);
@@ -1221,6 +1319,66 @@ pub fn handle_http_connection(
             let json = serde_json::to_string(&digest).map_err(|e| e.to_string())?;
             write_http_response(&mut stream, 200, "application/json", &json)
         }
+        ("GET", "/api/ai/settings") => {
+            let guard = state.lock().map_err(|_| "state lock poisoned")?;
+            write_json_result(&mut stream, assistant::settings(&guard))
+        }
+        ("POST", "/api/ai/settings") => {
+            let result = (|| {
+                let value =
+                    serde_json::from_str(&body_str).map_err(|e| format!("Invalid JSON: {e}"))?;
+                let mut guard = state.lock().map_err(|_| "state lock poisoned")?;
+                assistant::save_settings(&mut guard, value)
+            })();
+            if result.is_ok() {
+                assistant::start_worker(&state)?;
+            }
+            write_json_result(&mut stream, result)
+        }
+        ("POST", "/api/ai/summarize") => {
+            let result = (|| {
+                let value: serde_json::Value =
+                    serde_json::from_str(&body_str).map_err(|e| e.to_string())?;
+                let id = value
+                    .get("id")
+                    .and_then(|v| v.as_i64())
+                    .ok_or("missing id")?;
+                let guard = state.lock().map_err(|_| "state lock poisoned")?;
+                if !guard.config.ai.enabled || !guard.policy.ai_allowed_now {
+                    return Err("AI is disabled or paused by the device power profile".into());
+                }
+                assistant::queue_item(&guard.store, id, &guard.config.ai, true)?;
+                Ok(serde_json::json!({"ok":true,"queued":true}))
+            })();
+            if result.is_ok() {
+                assistant::start_worker(&state)?;
+            }
+            write_json_result(&mut stream, result)
+        }
+        ("GET", "/api/ai/result") => {
+            let id = query_param(query, "item_id")
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(0);
+            let guard = state.lock().map_err(|_| "state lock poisoned")?;
+            write_json_result(&mut stream, assistant::result(&guard, id))
+        }
+        ("POST", "/api/ai/restore") => {
+            let result = (|| {
+                let value: serde_json::Value =
+                    serde_json::from_str(&body_str).map_err(|e| e.to_string())?;
+                let id = value
+                    .get("id")
+                    .and_then(|v| v.as_i64())
+                    .ok_or("missing id")?;
+                let mut guard = state.lock().map_err(|_| "state lock poisoned")?;
+                if !guard.store.restore_ai_item(id)? {
+                    return Err("AI-hidden message not found".into());
+                }
+                guard.ai_revision = guard.ai_revision.wrapping_add(1);
+                Ok(serde_json::json!({"ok":true}))
+            })();
+            write_json_result(&mut stream, result)
+        }
         ("POST", "/api/ai/qa") => {
             let v: serde_json::Value =
                 serde_json::from_str(&body_str).map_err(|e| e.to_string())?;
@@ -1254,10 +1412,20 @@ pub fn handle_http_connection(
             let v: serde_json::Value =
                 serde_json::from_str(&body_str).map_err(|e| e.to_string())?;
             let code = v.get("code").and_then(|x| x.as_str()).unwrap_or("");
-            let mut guard = state
-                .lock()
-                .map_err(|_| "state lock poisoned".to_string())?;
-            guard.clipboard.record_copy(code, now_epoch());
+            let delay_secs = {
+                let mut guard = state
+                    .lock()
+                    .map_err(|_| "state lock poisoned".to_string())?;
+                guard.clipboard.record_copy(code, now_epoch());
+                guard.clipboard.clear_delay_secs()
+            };
+            let st_clone = Arc::clone(&state);
+            std::thread::spawn(move || {
+                std::thread::sleep(Duration::from_secs(delay_secs));
+                if let Ok(mut guard) = st_clone.lock() {
+                    let _ = guard.clipboard.poll_and_clear_os_clipboard(now_epoch());
+                }
+            });
             write_http_response(&mut stream, 200, "application/json", "{\"ok\":true}")
         }
         ("POST", "/api/hub/pair") => {
@@ -1302,6 +1470,7 @@ pub fn handle_http_connection(
             let guard = state
                 .lock()
                 .map_err(|_| "state lock poisoned".to_string())?;
+            let _ = guard.secrets.delete_secret(&format!("hub:device:{dev_id}"));
             let _ = guard.store.revoke_paired_device(dev_id)?;
             write_http_response(&mut stream, 200, "application/json", "{\"ok\":true}")
         }
@@ -1311,6 +1480,19 @@ pub fn handle_http_connection(
             let guard = state
                 .lock()
                 .map_err(|_| "state lock poisoned".to_string())?;
+            let is_active = guard
+                .store
+                .list_paired_devices()?
+                .iter()
+                .any(|d| d.device_id == env.device_id && !d.revoked);
+            if !is_active {
+                return write_http_response(
+                    &mut stream,
+                    403,
+                    "text/plain",
+                    "paired device revoked or unknown",
+                );
+            }
             let secret = guard
                 .secrets
                 .get_secret(&format!("hub:device:{}", env.device_id))?
@@ -1339,6 +1521,25 @@ fn write_http_response(
     content_type: &str,
     body: &str,
 ) -> Result<(), String> {
+    write_http_bytes(stream, status, content_type, body.as_bytes())
+}
+
+fn write_json_result(
+    stream: &mut TcpStream,
+    result: Result<serde_json::Value, String>,
+) -> Result<(), String> {
+    match result {
+        Ok(value) => write_http_response(stream, 200, "application/json", &value.to_string()),
+        Err(error) => write_http_response(stream, 400, "text/plain; charset=utf-8", &error),
+    }
+}
+
+fn write_http_bytes(
+    stream: &mut TcpStream,
+    status: u16,
+    content_type: &str,
+    body: &[u8],
+) -> Result<(), String> {
     let status_text = match status {
         200 => "OK",
         400 => "Bad Request",
@@ -1351,7 +1552,7 @@ fn write_http_response(
     );
     stream
         .write_all(header.as_bytes())
-        .and_then(|_| stream.write_all(body.as_bytes()))
+        .and_then(|_| stream.write_all(body))
         .map_err(|e| e.to_string())
 }
 
@@ -1398,28 +1599,55 @@ fn now_epoch() -> i64 {
         .unwrap_or(0)
 }
 
+fn is_loopback_authority(authority: &str) -> bool {
+    let trimmed = authority.trim().trim_end_matches('/');
+    let host = if let Some(after_bracket) = trimmed.strip_prefix('[') {
+        after_bracket.split_once(']').map_or("", |(h, _)| h)
+    } else {
+        trimmed.split_once(':').map_or(trimmed, |(h, _)| h)
+    };
+    host.eq_ignore_ascii_case("127.0.0.1")
+        || host.eq_ignore_ascii_case("localhost")
+        || host == "::1"
+}
+
+fn load_live_overlay_html() -> String {
+    #[cfg(debug_assertions)]
+    if let Ok(raw) = std::fs::read_to_string("crates/ui-web/src/otp_overlay.html") {
+        return raw;
+    }
+    OTP_OVERLAY_HTML.to_string()
+}
+
 fn live_ui_mtime_ms() -> u64 {
-    std::fs::metadata("crates/ui-web/src/lib.rs")
-        .and_then(|m| m.modified())
-        .ok()
-        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0)
+    #[cfg(debug_assertions)]
+    {
+        std::fs::metadata("crates/ui-web/src/lib.rs")
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0)
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        0
+    }
 }
 
 fn load_live_ui_asset(const_name: &str, fallback: &'static str) -> String {
-    let Ok(raw) = std::fs::read_to_string("crates/ui-web/src/lib.rs") else {
-        return fallback.to_string();
-    };
-    let marker = format!("pub const {const_name}: &str = r##\"");
-    let Some(start) = raw.find(&marker) else {
-        return fallback.to_string();
-    };
-    let after = &raw[start + marker.len()..];
-    let Some(end) = after.find("\"##;") else {
-        return fallback.to_string();
-    };
-    after[..end].to_string()
+    #[cfg(debug_assertions)]
+    if let Ok(raw) = std::fs::read_to_string("crates/ui-web/src/lib.rs") {
+        let marker = format!("pub const {const_name}: &str = r##\"");
+        if let Some(start) = raw.find(&marker) {
+            let after = &raw[start + marker.len()..];
+            if let Some(end) = after.find("\"##;") {
+                return after[..end].to_string();
+            }
+        }
+    }
+    let _ = const_name;
+    fallback.to_string()
 }
 
 #[cfg(test)]
@@ -1790,6 +2018,10 @@ mod tests {
                 "667b4d2274e285b357b7063195297236e026f73e9e4c8062a571984d39759202"
             ) || !verify_artifact_sha256(b"vortex", "0000")
         );
+        assert!(is_loopback_authority("127.0.0.1:7788"));
+        assert!(is_loopback_authority("localhost:7788"));
+        assert!(!is_loopback_authority("127.0.0.1.attacker.com"));
+        assert!(!is_loopback_authority("localhost.evil.com:7788"));
     }
 
     #[test]
@@ -1854,6 +2086,11 @@ mod tests {
             policy,
             secrets,
             clipboard: ClipboardGuard::new(45),
+            ai_worker_running: false,
+            ai_busy: false,
+            ai_generation: 0,
+            ai_revision: 0,
+            ai_last_error: None,
         }));
 
         let res = sync_accounts_concurrent(&state, None, "127.0.0.1:7788").unwrap();
