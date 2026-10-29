@@ -202,9 +202,9 @@ fn ensure_ollama_ready(
     if !is_default_ollama_endpoint(endpoint) || list_ollama_models(endpoint).is_ok() {
         return Ok(());
     }
-    let mut bin = find_ollama_binary();
+    let bin = find_ollama_binary();
     #[cfg(target_os = "windows")]
-    if bin.is_none() && !cancel.load(Ordering::Relaxed) {
+    let bin = if bin.is_none() && !cancel.load(Ordering::Relaxed) {
         use std::os::windows::process::CommandExt;
         use std::process::{Command, Stdio};
         on_status("Installing Ollama...");
@@ -224,8 +224,8 @@ fn ensure_ollama_ready(
             .stderr(Stdio::null())
             .creation_flags(0x0800_0000)
             .status();
-        bin = find_ollama_binary();
-        if bin.is_none() && !cancel.load(Ordering::Relaxed) {
+        let mut found = find_ollama_binary();
+        if found.is_none() && !cancel.load(Ordering::Relaxed) {
             let installer = std::env::temp_dir().join("OllamaSetup.exe");
             let dl_ok = Command::new("curl.exe")
                 .args([
@@ -249,10 +249,13 @@ fn ensure_ollama_ready(
                     .creation_flags(0x0800_0000)
                     .status();
                 let _ = std::fs::remove_file(&installer);
-                bin = find_ollama_binary();
+                found = find_ollama_binary();
             }
         }
-    }
+        found
+    } else {
+        bin
+    };
     if let Some(bin_path) = bin {
         on_status("Starting Ollama...");
         spawn_ollama_serve(&bin_path);

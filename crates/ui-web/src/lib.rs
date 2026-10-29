@@ -1916,29 +1916,29 @@ pub const CLICK_AUDIO: &[u8] = include_bytes!("click.m4a");
 pub const LOCAL_MODELS_JS: &str = include_str!("local_models.js");
 /// Assets loaded by the main window; the overlay and click audio load separately.
 pub const fn bundle_size_bytes() -> u64 {
-(INDEX_HTML.len() + STYLES_CSS.len() + APP_JS.len()) as u64
+    (INDEX_HTML.len() + STYLES_CSS.len() + APP_JS.len()) as u64
 }
 #[cfg(test)]
 mod tests {
-use super::*;
-use vortex_core::WEB_UI_MAX_ASSET_BYTES;
-#[test]
-fn bundle_stays_within_150kb_budget_and_hallmark_floor() {
-assert!(bundle_size_bytes() <= WEB_UI_MAX_ASSET_BYTES);
-assert!(OTP_OVERLAY_HTML.len() as u64 <= WEB_UI_MAX_ASSET_BYTES);
-assert!(LOCAL_MODELS_JS.len() as u64 <= WEB_UI_MAX_ASSET_BYTES);
-assert!(STYLES_CSS.starts_with("/* hallmark"));
-assert!(!STYLES_CSS.contains("transition: all"));
-assert!(!STYLES_CSS.contains("linear-gradient"));
-assert!(!STYLES_CSS.contains("radial-gradient"));
-assert!(!STYLES_CSS.contains("100vw"));
-assert!(!STYLES_CSS.to_ascii_lowercase().contains("#000"));
-assert!(!STYLES_CSS.to_ascii_lowercase().contains("#fff"));
-assert!(!APP_JS.to_ascii_lowercase().contains("#000"));
-assert!(!APP_JS.to_ascii_lowercase().contains("#fff"));
-assert!(STYLES_CSS.contains("overflow-x: clip"));
-assert!(STYLES_CSS.contains("prefers-reduced-motion: reduce"));
-assert!(INDEX_HTML.contains("viewBox=\"0 0 20 20\" fill=\"currentColor\""));
-assert!(!INDEX_HTML.contains("fill=\"none\""));
-}
+    use super::*;
+    use vortex_core::WEB_UI_MAX_ASSET_BYTES;
+    #[test]
+    fn bundle_stays_within_150kb_budget_and_hallmark_floor() {
+        assert!(bundle_size_bytes() <= WEB_UI_MAX_ASSET_BYTES);
+        assert!(OTP_OVERLAY_HTML.len() as u64 <= WEB_UI_MAX_ASSET_BYTES);
+        assert!(LOCAL_MODELS_JS.len() as u64 <= WEB_UI_MAX_ASSET_BYTES);
+        assert!(STYLES_CSS.starts_with("/* hallmark"));
+        assert!(!STYLES_CSS.contains("transition: all"));
+        assert!(!STYLES_CSS.contains("linear-gradient"));
+        assert!(!STYLES_CSS.contains("radial-gradient"));
+        assert!(!STYLES_CSS.contains("100vw"));
+        assert!(!STYLES_CSS.to_ascii_lowercase().contains("#000"));
+        assert!(!STYLES_CSS.to_ascii_lowercase().contains("#fff"));
+        assert!(!APP_JS.to_ascii_lowercase().contains("#000"));
+        assert!(!APP_JS.to_ascii_lowercase().contains("#fff"));
+        assert!(STYLES_CSS.contains("overflow-x: clip"));
+        assert!(STYLES_CSS.contains("prefers-reduced-motion: reduce"));
+        assert!(INDEX_HTML.contains("viewBox=\"0 0 20 20\" fill=\"currentColor\""));
+        assert!(!INDEX_HTML.contains("fill=\"none\""));
+    }
 }
