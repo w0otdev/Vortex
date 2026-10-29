@@ -298,7 +298,8 @@ pub fn parse_bulk_account_line(
 /// during network I/O. Each worker writes its fetched items into SQLite as soon as its own
 /// connection finishes so OTP codes from fast accounts appear immediately.
 static LAST_GWEB_SPAWN_SEC: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
-static GWEB_CHILD_RUNNING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static GWEB_CHILD_RUNNING: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 pub fn sync_accounts_concurrent(
     state: &Arc<Mutex<DaemonState>>,
@@ -1172,16 +1173,14 @@ pub fn handle_http_connection(
                             .and_then(|x| x.as_str())
                             .unwrap_or("")
                             .trim();
-                        let stripped_html = raw_html
-                            .split("<!--v:")
-                            .next()
-                            .unwrap_or(raw_html)
-                            .trim();
-                        let body_html = if stripped_html.contains('<') && stripped_html.contains('>') {
-                            stripped_html.to_string()
-                        } else {
-                            String::new()
-                        };
+                        let stripped_html =
+                            raw_html.split("<!--v:").next().unwrap_or(raw_html).trim();
+                        let body_html =
+                            if stripped_html.contains('<') && stripped_html.contains('>') {
+                                stripped_html.to_string()
+                            } else {
+                                String::new()
+                            };
                         if !body_html.is_empty() {
                             let from_html = vortex_imap::mime::html_to_plain_text(&body_html);
                             if from_html.len() > body_text.len() {
